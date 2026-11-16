@@ -167,6 +167,10 @@ func TestTemplateEnvVarsAreReadByEntrypoint(t *testing.T) {
 		"ZEN_GATE_ALLOW_LAN":          true,
 		"ZEN_GATE_ALLOW_REMOTE_ADMIN": true,
 		"ZEN_GATE_SHOW_KEY":           true,
+		"ZEN_GATE_UID":                true,
+		"ZEN_GATE_GID":                true,
+		"PUID":                        true,
+		"PGID":                        true,
 		"TZ":                          true,
 	}
 	var vars []string
@@ -225,5 +229,26 @@ func TestTemplateMatchesImageDefinition(t *testing.T) {
 	}
 	if !strings.Contains(tpl.TemplateURL, "/unraid/lamp-guide.xml") {
 		t.Errorf("TemplateURL 应指向本模板自己，实际 %q", tpl.TemplateURL)
+	}
+}
+
+// 数据目录的属主在 NAS 上经常对不上（面板用 root/nobody 建目录），镜像靠入口脚本
+// 先 chown 再降权解决。模板里的 PUID/PGID 因此必须存在且有合理默认值。
+func TestTemplateRunsAsConfigurableUser(t *testing.T) {
+	tpl := loadTemplate(t)
+	want := map[string]string{"PUID": "99", "PGID": "100"}
+	got := map[string]string{}
+	for _, c := range tpl.Configs {
+		if c.Type != "Variable" {
+			continue
+		}
+		if _, ok := want[c.Target]; ok {
+			got[c.Target] = c.Default
+		}
+	}
+	for name, def := range want {
+		if got[name] != def {
+			t.Errorf("模板的 %s 默认值应为 %q（Unraid 惯例），实际 %q", name, def, got[name])
+		}
 	}
 }

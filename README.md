@@ -51,7 +51,8 @@ Unraid 用户有现成模板：[`unraid/lamp-guide.xml`](unraid/lamp-guide.xml)�
 | 改动 | 说明 |
 | --- | --- |
 | `cmd/lamp-guide-server` | 无界面入口：读环境变量、打印地址与密钥、收到 SIGTERM 干净退出 |
-| `Dockerfile` / `docker-compose.yml` / `.dockerignore` | 多阶段构建、静态二进制、非 root 用户、HEALTHCHECK、多架构 |
+| `Dockerfile` / `docker-compose.yml` / `.dockerignore` | 多阶段构建、静态二进制、HEALTHCHECK、多架构 |
+| `docker-entrypoint.sh` | 容器入口：把数据目录改成运行用户可写，再降权启动网关 |
 | 远端管理开关 | 管理接口仍默认只认回环；`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 时远端请求改用主密钥校验 |
 | `ZEN_GATE_KEY` | 启动时用自己的主密钥覆盖 `config.json` 里的随机密钥，省去从日志里翻 |
 | CI | 在 GitHub Actions 里真机构建镜像、起容器冒烟，再推 GHCR 多架构清单 |
@@ -65,6 +66,7 @@ Unraid 用户有现成模板：[`unraid/lamp-guide.xml`](unraid/lamp-guide.xml)�
 | `ZEN_GATE_PORT` | `8787` | 监听端口 |
 | `ZEN_GATE_ALLOW_LAN` | `1` | 监听 `0.0.0.0`，允许局域网访问 |
 | `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `0` | 允许远端用主密钥调 `/admin/api/*` |
+| `PUID` / `PGID` | `10001` | 运行用户（NAS 惯例写法）；入口脚本先按它改数据目录属主再降权运行 |
 | `ZEN_GATE_SHOW_KEY` | `0` | 启动日志里打印完整主密钥 |
 | `TZ` | `Asia/Shanghai` | 容器时区 |
 

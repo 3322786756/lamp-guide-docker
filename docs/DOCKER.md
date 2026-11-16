@@ -122,20 +122,46 @@ wget -O /boot/config/plugins/dockerMan/templates-user/lamp-guide.xml \
 | --- | --- | --- |
 | WebUI 端口 | `8787` | 宿主端口；容器内部固定监听 8787 |
 | 数据目录 | `/mnt/user/appdata/lamp-guide` | 网关全部状态，务必在 appdata 里并被备份覆盖 |
+| PUID / PGID | `99` / `100` | 数据文件的属主（Unraid 惯例 nobody:users）；容器启动时先按它改属主再降权运行 |
 | 主密钥 | 空 | 留空则首次启动生成随机密钥，可从容器日志拿 |
 | 允许远端管理 | `0` | 想从别的电脑用浏览器调 `/admin/api/*` 才改成 1（仍需主密钥） |
-
-镜像内以 uid `10001` 运行。如果日志里出现无法写入数据目录，在 Unraid 终端执行：
-
-```bash
-chown -R 10001:10001 /mnt/user/appdata/lamp-guide
-```
 
 只想看网关活着没有、又不想开远端管理，可以让容器自己问自己（回环地址无需密钥）：
 
 ```bash
 docker exec -it lamp-guide wget -qO- http://127.0.0.1:8787/admin/api/state
 ```
+
+### 运行用户与数据目录权限
+
+容器的入口脚本分两步走：
+
+1. 以 root 起步，把 `ZEN_GATE_HOME`（默认 `/data`）的属主改成运行用户 —— 只在属主对不上时才改，不是每次启动都递归 chown；
+2. 立刻 `su-exec` 降权，网关进程本身跑在运行用户名下，**服务进程不是 root**。
+
+运行用户默认 `10001:10001`，可以用 `ZEN_GATE_UID` / `ZEN_GATE_GID`，或者 NAS 上常见的 `PUID` / `PGID` 指定：
+
+```bash
+docker run -d --name lamp-guide -p 8787:8787 \
+  -v /mnt/user/appdata/lamp-guide:/data \
+  -e PUID=99 -e PGID=100 \
+  lamp-guide:latest
+```
+
+所以宿主机目录是谁建的都能起：`root` 建的、`nobody` 建的、别的容器的老目录都行，日志里会看到一行
+
+```
+docker-entrypoint: /data 当前属主 0:0，改成 99:100
+```
+
+如果你连「以 root 起步」都不接受，就在宿主机先把目录改好，再用 `--user` 指定同一个 uid，入口脚本会走非 root 分支、只做一次可写性检查：
+
+```bash
+sudo chown -R 10001:10001 /mnt/user/appdata/lamp-guide
+docker run -d --user 10001:10001 -v /mnt/user/appdata/lamp-guide:/data ... lamp-guide:latest
+```
+
+日志里出现 `permission denied` 或「改属主失败」，说明数据目录所在的文件系统不让 root 改属主（少数网络挂载会这样），按上面的 `--user` 方案处理即可。
 
 ## 拿到主密钥
 
@@ -216,6 +242,7 @@ docker compose restart lamp-guide
 | `ZEN_GATE_SHOW_KEY` | `0` | 启动时把完整主密钥打进日志 |
 | `ZEN_GATE_KEY` | 空 | 自定义主密钥；设了就写进 `config.json`，之后启动一直沿用它 |
 | `TZ` | `Asia/Shanghai` | 时区，影响日志与用量统计的时间戳 |
+| `PUID` / `PGID` | `10001` / `10001` | 容器内运行用户（NAS 惯例写法）；也可以写 `ZEN_GATE_UID` / `ZEN_GATE_GID` |
 
 布尔量接受 `1/true/yes/on` 与 `0/false/no/off`；写别的值会在日志里提示并回落到默认值。
 

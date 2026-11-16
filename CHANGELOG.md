@@ -13,6 +13,7 @@
 - 无界面入口支持 `ZEN_GATE_KEY` 自定义主密钥：启动时写入 `config.json` 并沿用，省去从日志里翻随机密钥；运行中仍可用 `POST /admin/api/key/rotate` 更换。
 - CI 增加 Linux 构建与容器冒烟作业（`go vet` 网关包、构建镜像、起容器验 `/health` 与卷内 `config.json`）。
 - 新增 Unraid Docker 模板 `unraid/lamp-guide.xml`（bridge 网络、`/data` 指到 appdata、主密钥等字段表单化），并加 `unraid` 包测试锁住模板与镜像定义一致（端口 8787、卷 `/data`、环境变量名、图标与模板地址）。
+- 新增容器入口脚本 `docker-entrypoint.sh`：以 root 起步只为把数据目录改成运行用户可写（修掉宿主机或 NAS 面板建的 root/nobody 目录导致的 `open store: open /data/config.json.tmp: permission denied`），随后 `su-exec` 降权，服务进程仍非 root；运行用户可用 `ZEN_GATE_UID`/`ZEN_GATE_GID` 或 NAS 惯例的 `PUID`/`PGID` 指定，拒绝以 root 起步时可用 `--user` 走非 root 分支。
 
 ## Lamp Guide 1.2.1 — 2026-11-06
 

@@ -36,6 +36,10 @@ services:
       # 建议放在 .env 或 env_file 里，别写进这个文件提交上库。
       ZEN_GATE_KEY: "${ZEN_GATE_KEY:-}"
       TZ: "${TZ:-Asia/Shanghai}"
+      # 挂宿主机目录时，把数据文件的属主对齐到宿主机的用户（NAS 上常见 UID 99/100）。
+      # 不设就是镜像默认的 10001；入口脚本会按这里的值改一次目录属主再降权运行。
+      PUID: "${PUID:-10001}"
+      PGID: "${PGID:-10001}"
 
     volumes:
       # 具名卷：最简单，状态跟着 Docker 走。

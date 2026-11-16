@@ -59,15 +59,22 @@ FROM ${RUNTIME_IMAGE}
 
 # ca-certificates: 网关要跟各渠道走 HTTPS。
 # tzdata:          日志和用量统计按本地时区落盘。
-RUN apk add --no-cache ca-certificates tzdata \
+# su-exec:         入口脚本降权用（根用户只是过一手，服务进程不许是 root）。
+RUN apk add --no-cache ca-certificates tzdata su-exec \
     && adduser -D -H -u 10001 -s /sbin/nologin lamp \
     && mkdir -p /data \
     && chown 10001:10001 /data
 
 COPY --from=build /out/lamp-guide-server /usr/local/bin/lamp-guide-server
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
-# 非 root 运行：进程只需要 /data 一个可写目录。
-USER lamp
+# 入口脚本以 root 起步，只为了把数据目录改成运行用户可写——卷往往由宿主机或 NAS 面板
+# 建成 root/nobody 属主，直接以 uid 10001 启动会 permission denied——随后立刻 su-exec
+# 降权，网关进程本身跑在 uid 10001（可用 ZEN_GATE_UID/ZEN_GATE_GID 或 PUID/PGID 改）。
+# 不接受以 root 起步的玩法：先在宿主机把目录 chown 到 10001:10001，再 docker run
+# --user 10001:10001，入口脚本会走非 root 分支，只做可写性检查。
+USER root
 
 # /data 是网关的全部状态：config.json（渠道登录、供应商、主密钥、用量统计）。
 # 不挂卷等于每次重建都从空白配置开始。
@@ -85,4 +92,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD http_proxy= https_proxy= no_proxy='*' \
         wget -q -O /dev/null "http://127.0.0.1:${ZEN_GATE_PORT:-8787}/health" || exit 1
 
-ENTRYPOINT ["/usr/local/bin/lamp-guide-server"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

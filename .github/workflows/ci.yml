@@ -74,8 +74,8 @@ jobs:
           docker logs lg
           # 首次启动必须把 config.json 落到卷目录：那是网关的全部状态。
           docker exec lg sh -c 'test -s /data/config.json'
-          # 非 root 运行，且数据目录归它所有。
-          test "$(docker exec lg id -u)" = 10001
+          # 服务进程不是 root：入口脚本把数据目录交给 10001，落盘的文件就该是 10001 的。
+          test "$(docker exec lg stat -c '%u:%g' /data/config.json)" = 10001:10001
           # HEALTHCHECK 要真的翻成 healthy：alpine 里只有 busybox 的 wget，
           # 探针命令写错（比如被 HTTP_PROXY 劫持）会在这里卡成 unhealthy。
           status=starting
@@ -101,6 +101,42 @@ jobs:
           echo "exit code=$code"
           test "$code" = 0
           docker rm lg
+      # 卷的属主不对是容器部署最常见的坑：NAS 面板、docker 自动创建、别人留下的目录
+      # 往往是 root 或 nobody 属主，网关一启动就 open config.json.tmp: permission denied。
+      # 这里用「root 专属目录」和「PUID/PGID 覆盖」两种真实场景把入口脚本钉住。
+      - name: Smoke test data directory ownership
+        run: |
+          set -euo pipefail
+          wait_health() {
+            for _ in $(seq 1 30); do
+              curl -fsS "$1/health" | grep -q '"ok":true' && return 0
+              sleep 2
+            done
+            return 1
+          }
+          proc_uid() {
+            docker exec "$1" sh -c 'grep -m1 "^Uid:" /proc/$(pidof lamp-guide-server)/status | cut -f2'
+          }
+          # 1) 宿主机上 root:root 0700 的目录，运行用户 10001 本来写不进去。
+          mkdir -p permtest
+          sudo chown 0:0 permtest
+          sudo chmod 0700 permtest
+          docker run -d --name lgperm -p 8789:8787 -v "$PWD/permtest:/data" lamp-guide:ci
+          wait_health http://127.0.0.1:8789 || { docker logs lgperm; exit 1; }
+          docker logs lgperm | grep -q '当前属主 0:0'
+          test -s permtest/config.json
+          test "$(stat -c '%u:%g' permtest/config.json)" = 10001:10001
+          # 降权之后进程本身是 10001，不是 root。
+          test "$(proc_uid lgperm)" = 10001
+          docker rm -f lgperm
+          # 2) Unraid 那类面板用 PUID/PGID 指定属主：文件与进程都要跟着变。
+          mkdir -p permtest2
+          docker run -d --name lgperm2 -p 8790:8787 -v "$PWD/permtest2:/data" \
+            -e PUID=99 -e PGID=100 lamp-guide:ci
+          wait_health http://127.0.0.1:8790 || { docker logs lgperm2; exit 1; }
+          test "$(stat -c '%u:%g' permtest2/config.json)" = 99:100
+          test "$(proc_uid lgperm2)" = 99
+          docker rm -f lgperm2
       - name: Smoke test remote admin and custom key
         run: |
           set -euo pipefail
@@ -127,8 +163,8 @@ jobs:
         if: failure()
         run: |
           docker ps -a || true
-          docker logs lg || true
-          docker logs lg2 || true
+          for c in lg lgperm lgperm2 lg2; do docker logs "$c" || true; done
+          ls -la permtest permtest2 2>/dev/null || true
 
   # 发布镜像：默认推到 GitHub 自带的容器仓库 GHCR，用 GITHUB_TOKEN，不需要额外配置。
   # 想同时推 Docker Hub：在仓库 Settings → Secrets 里加 DOCKERHUB_USERNAME、DOCKERHUB_TOKEN，
