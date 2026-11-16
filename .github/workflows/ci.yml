@@ -123,8 +123,10 @@ jobs:
           sudo chmod 0700 permtest
           docker run -d --name lgperm -p 8789:8787 -v "$PWD/permtest:/data" lamp-guide:ci
           wait_health http://127.0.0.1:8789 || { docker logs lgperm; exit 1; }
-          docker logs lgperm | grep -q '当前属主 0:0'
+          # 入口脚本的提示走 stderr，docker logs 要合并两路才 grep 得到。
+          docker logs lgperm 2>&1 | grep -q '当前属主 0:0'
           test -s permtest/config.json
+          echo "config.json owner=$(stat -c '%u:%g' permtest/config.json)"
           test "$(stat -c '%u:%g' permtest/config.json)" = 10001:10001
           # 降权之后进程本身是 10001，不是 root。
           test "$(proc_uid lgperm)" = 10001
@@ -134,7 +136,9 @@ jobs:
           docker run -d --name lgperm2 -p 8790:8787 -v "$PWD/permtest2:/data" \
             -e PUID=99 -e PGID=100 lamp-guide:ci
           wait_health http://127.0.0.1:8790 || { docker logs lgperm2; exit 1; }
+          echo "config.json owner=$(stat -c '%u:%g' permtest2/config.json)"
           test "$(stat -c '%u:%g' permtest2/config.json)" = 99:100
+          echo "server uid=$(proc_uid lgperm2)"
           test "$(proc_uid lgperm2)" = 99
           docker rm -f lgperm2
       - name: Smoke test remote admin and custom key
