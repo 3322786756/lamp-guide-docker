@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-Hans" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lamp Guide · 登录</title>
+<link rel="icon" type="image/svg+xml" href="/admin/ui/assets/lamp-guide.svg">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --fg: #1c1e21; --dim: #6b7280; --card: #ffffff;
+    --line: #e3e6ea; --accent: #2f6feb; --err: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16181d; --fg: #e8eaed; --dim: #9aa0a6; --card: #1e2126; --line: #2c3037; --accent: #5b8def; --err: #e57373; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 380px; padding: 28px 26px; border-radius: 14px;
+    background: var(--card); border: 1px solid var(--line);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .08);
+  }
+  h1 { margin: 0 0 4px; font-size: 19px; font-weight: 600; }
+  p.sub { margin: 0 0 20px; color: var(--dim); font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+  input[type=password] {
+    width: 100%; padding: 10px 12px; font: inherit; color: inherit;
+    background: transparent; border: 1px solid var(--line); border-radius: 8px;
+  }
+  input[type=password]:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  button {
+    margin-top: 16px; width: 100%; padding: 10px 12px; font: inherit; font-weight: 600;
+    color: #fff; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer;
+  }
+  button[disabled] { opacity: .6; cursor: default; }
+  .err { margin-top: 12px; color: var(--err); font-size: 13px; min-height: 1.2em; }
+  .hint { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+  .hint code { font-family: ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<form class="card" id="form" autocomplete="off">
+  <h1>Lamp Guide 网关</h1>
+  <p class="sub">输入主密钥即可进入管理界面。</p>
+  <label for="key">主密钥（mainKey）</label>
+  <input id="key" type="password" name="key" placeholder="ofm-… 或 ZEN_GATE_KEY 里设的值" autofocus>
+  <button id="go" type="submit">进入</button>
+  <div class="err" id="err"></div>
+  <div class="hint">
+    主密钥在容器的 <code>/data/config.json</code> 里；启动日志也会打印（<code>ZEN_GATE_SHOW_KEY=1</code> 时是完整值）。
+  </div>
+</form>
+<script>
+  const form = document.getElementById('form');
+  const input = document.getElementById('key');
+  const button = document.getElementById('go');
+  const errBox = document.getElementById('err');
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const key = input.value.trim();
+    if (!key) return;
+    button.disabled = true;
+    errBox.textContent = '';
+    try {
+      const res = await fetch('/admin/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: key })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.ok) {
+        location.replace('/admin/ui/');
+        return;
+      }
+      errBox.textContent = body.error || '登录失败（' + res.status + '）';
+    } catch (err) {
+      errBox.textContent = '连不上网关：' + ((err && err.message) || err);
+    }
+    button.disabled = false;
+    input.select();
+  });
+</script>
+</body>
+</html>

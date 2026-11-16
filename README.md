@@ -14,7 +14,7 @@
 
 Lamp Guide 原本是 Windows 桌面应用：界面用 Win32 + WebView2，网关和界面跑在同一个进程里。本仓库在它基础上补了一层**无界面入口**，让网关单独跑在 Linux 容器里——NAS、VPS、旁路由、树莓派都能当模型网关用，客户端填 `http://<主机>:8787/v1` 就能按 OpenAI / Anthropic 协议调用。
 
-容器里没有窗口、托盘和 WebView2，所以镜像很小；反过来，桌面版专有的功能（Agent 配置注入、应用自更新、sing-box 订阅应用）在容器里不生效，取舍和替代做法见 [docs/DOCKER.md](docs/DOCKER.md)。
+容器里没有窗口、托盘和 WebView2，所以镜像很小；界面本身是普通网页，镜像把它一起带上了——浏览器打开 `http://<主机>:8787/admin` 就是同一套管理界面（渠道、模型、聚合、签到、日志、设置）。桌面版专有的动作（Agent 配置注入、应用自更新、sing-box 订阅应用）在容器里不生效，取舍和替代做法见 [docs/DOCKER.md](docs/DOCKER.md)。
 
 ## 快速开始
 
@@ -27,6 +27,8 @@ docker run -d --name lamp-guide \
 docker logs lamp-guide          # 启动日志里有 API 地址和主密钥提示
 curl http://127.0.0.1:8787/health
 ```
+
+起来之后，浏览器打开 `http://<主机>:8787/admin` 就是管理界面（在本机/回环打开不用登录；从别的设备打开要先把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成 `1`，再用主密钥登录）。
 
 也可以用仓库里的 `docker-compose.yml`：`docker compose up -d`。
 
@@ -53,6 +55,7 @@ Unraid 用户有现成模板：[`unraid/lamp-guide.xml`](unraid/lamp-guide.xml)�
 | `cmd/lamp-guide-server` | 无界面入口：读环境变量、打印地址与密钥、收到 SIGTERM 干净退出 |
 | `Dockerfile` / `docker-compose.yml` / `.dockerignore` | 多阶段构建、静态二进制、HEALTHCHECK、多架构 |
 | `docker-entrypoint.sh` | 容器入口：把数据目录改成运行用户可写，再降权启动网关 |
+| `internal/zen/gateway/webui.go` | 浏览器版管理界面：把桌面的消息桥换成 `/admin/rpc`，界面同一份文件，远端用主密钥换会话 |
 | 远端管理开关 | 管理接口仍默认只认回环；`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 时远端请求改用主密钥校验 |
 | `ZEN_GATE_KEY` | 启动时用自己的主密钥覆盖 `config.json` 里的随机密钥，省去从日志里翻 |
 | CI | 在 GitHub Actions 里真机构建镜像、起容器冒烟，再推 GHCR 多架构清单 |

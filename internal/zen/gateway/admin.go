@@ -43,12 +43,11 @@ func decodeBody(r *http.Request, v any) error {
 	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v)
 }
 
+// serveDashboard answers / and /admin. It used to be a static "网关在运行" note;
+// it now hands out the real web dashboard (webui.go), which serves the login
+// form first and the界面 itself afterwards.
 func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
-	if !s.dashboardFence(w, r) {
-		return
-	}
-	w.Header().Set("content-type", "text/html; charset=utf-8")
-	_, _ = w.Write(dashboardHTML)
+	s.serveBrowserUI(w, r)
 }
 
 // dashboardFence guards the static "gateway is running" page. It is fenced

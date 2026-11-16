@@ -164,11 +164,59 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-custom-key-9f3a1c7b' http://127.0.0.1:8788/admin/api/state)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer ci-custom-key-9f3a1c7b' -H 'Origin: http://evil.invalid' http://127.0.0.1:8788/admin/api/reprobe)" = 403
           docker rm -f lg2
+      # 容器里没有 WebView2，管理界面靠浏览器跑：这一条钉住「界面资源真的在镜像里、
+      # 页面能起来、远端登录能换到会话、会话能用 RPC 拿到数据」。
+      - name: Smoke test browser UI
+        run: |
+          set -euo pipefail
+          docker run -d --name lgui -p 8791:8787 \
+            -e ZEN_GATE_ALLOW_REMOTE_ADMIN=1 \
+            -e ZEN_GATE_KEY=ci-ui-key-0123456789abcdef \
+            lamp-guide:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8791/health | grep -q '"ok":true' && break
+            sleep 2
+          done
+          echo "--- boot log ---"
+          docker logs lgui
+          # 回环（容器自己）打开 /admin：不用登录，直接拿到界面。
+          docker exec lgui sh -c 'wget -qO- http://127.0.0.1:8787/admin/ui/ | grep -qi "Lamp Guide"'
+          # 远端：登录页而不是 403，说明远端管理开关生效；没会话时 RPC 一律 401。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin)" = 200
+          curl -s http://127.0.0.1:8791/admin | grep -q '主密钥'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            --data '{"id":1,"method":"Gateway","payload":{"path":"state"}}' \
+            http://127.0.0.1:8791/admin/rpc)" = 401
+          # 错密钥 401，正确密钥拿到会话 cookie。
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' --data '{"key":"ofm-wrong"}' \
+            http://127.0.0.1:8791/admin/login)" = 401
+          jar=$(mktemp)
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -X POST \
+            -H 'Content-Type: application/json' \
+            --data '{"key":"ci-ui-key-0123456789abcdef"}' \
+            http://127.0.0.1:8791/admin/login)" = 200
+          grep -q lamp_admin "$jar"
+          # 带会话：/admin 跳界面目录，静态资源与 RPC 都通，state 里真的有数据。
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" http://127.0.0.1:8791/admin)" = 303
+          test "$(curl -s -b "$jar" http://127.0.0.1:8791/admin/ui/js/webbridge.js | wc -c)" -gt 1000
+          curl -s -b "$jar" -X POST -H 'Content-Type: application/json' \
+            --data '{"id":7,"method":"Gateway","payload":{"path":"state"}}' \
+            http://127.0.0.1:8791/admin/rpc | grep -q '"ok":true'
+          # 导出走一次性下载令牌：能下载，第二次必须 404。
+          token=$(curl -s -b "$jar" -X POST -H 'Content-Type: application/json' \
+            --data '{"id":8,"method":"Gateway","payload":{"path":"state","saveTo":"state.json"}}' \
+            http://127.0.0.1:8791/admin/rpc | sed 's/.*"download":"\([^"]*\)".*/\1/')
+          test -n "$token"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "http://127.0.0.1:8791/admin/download/$token")" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "http://127.0.0.1:8791/admin/download/$token")" = 404
+          docker rm -f lgui
       - name: Container logs
         if: failure()
         run: |
           docker ps -a || true
-          for c in lg lgperm lgperm2 lg2; do docker logs "$c" || true; done
+          for c in lg lgperm lgperm2 lg2 lgui; do docker logs "$c" || true; done
           ls -la permtest permtest2 2>/dev/null || true
 
   # 发布镜像：默认推到 GitHub 自带的容器仓库 GHCR，用 GITHUB_TOKEN，不需要额外配置。

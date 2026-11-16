@@ -117,6 +117,16 @@ type Server struct {
 	// loopback path to the process sets it (the container entry point); set once
 	// before Start, so it needs no lock.
 	adminKeyRemote bool
+	// sessionSecret signs the browser dashboard's session cookie (webui.go). It
+	// is random per process, so a cookie never survives a restart, and the token
+	// it signs is derived from the main key, so rotating the key ends every
+	// session too.
+	sessionSecret []byte
+	// exports holds the bytes of an export route between the RPC reply and the
+	// browser's follow-up download; uploads/tmp are the file-dialog replacement
+	// for import. Both are short-lived and pruned on write.
+	fileMu  sync.Mutex
+	exports map[string]exportFile
 }
 
 // SetAdminKeyRemote lets a host without a loopback transport reach the
@@ -284,6 +294,8 @@ func (s *Server) autostartState() bool {
 // New builds a server; Handler is immediately usable (for tests).
 func New(l *lane.Lane, st *store.Store) *Server {
 	s := &Server{Lane: l, Store: st, listen: net.Listen, probeTasks: newTaskRegistry()}
+	s.sessionSecret = newSessionSecret()
+	s.exports = make(map[string]exportFile)
 	s.checkins = checkin.New(st.Home, s.checkinTargets, s.claimAccount)
 	s.checkinClient = lane.Client()
 	l.SetOpenCodePersist(s.persistOpenCode)
@@ -498,6 +510,18 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(faviconPNG)
 	case path == "" || path == "/" || path == "/admin":
 		s.serveDashboard(w, r)
+	case path == browserUIDir || strings.HasPrefix(path, browserUIDir+"/"):
+		s.serveAssets(w, r)
+	case path == "/admin/login" && r.Method == http.MethodPost:
+		s.serveLogin(w, r)
+	case path == "/admin/logout" && r.Method == http.MethodPost:
+		s.serveLogout(w, r)
+	case path == "/admin/rpc" && r.Method == http.MethodPost:
+		s.serveRPC(w, r)
+	case path == "/admin/upload" && r.Method == http.MethodPost:
+		s.serveUpload(w, r)
+	case strings.HasPrefix(path, "/admin/download/"):
+		s.serveDownload(w, r, strings.TrimPrefix(path, "/admin/download/"))
 	case strings.HasPrefix(path, "/admin/api/"):
 		s.handleAdmin(w, r, strings.TrimPrefix(path, "/admin/api/"))
 	default:

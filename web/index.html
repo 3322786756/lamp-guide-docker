@@ -35,6 +35,9 @@
 </head>
 <body class="no-anim">
 <div id="app"></div>
+<!-- 容器部署时没有 WebView2 注入的宿主通道，这一行补上浏览器版（桌面版里它自己会
+     发现真宿主已存在并直接退出）。必须早于 shell.js 执行，所以是普通脚本。 -->
+<script src="./js/webbridge.js"></script>
 <script type="module" src="./js/shell.js"></script>
 </body>
 </html>

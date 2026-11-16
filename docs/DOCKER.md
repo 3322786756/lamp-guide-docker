@@ -1,6 +1,6 @@
 # 用 Docker 跑 Lamp Guide 网关
 
-Lamp Guide 的界面是 Win32 + WebView2 写的，只能跑在 Windows 上；**进容器的是网关**——也就是那些 OpenAI / Anthropic 兼容的 `/v1` 接口。容器里的进程叫 `lamp-guide-server`，由 `internal/zen/core` 直接抬起来，不带窗口、托盘和 WebView2，因此镜像很小，任何一台装了 Docker 的 Linux 机器（含 NAS、VPS、旁路由）都能跑。
+Lamp Guide 的桌面版是 Win32 + WebView2 写的，只能跑在 Windows 上；**进容器的是网关**——那些 OpenAI / Anthropic 兼容的 `/v1` 接口，加上一套**跑在浏览器里的同一份管理界面**。容器里的进程叫 `lamp-guide-server`，由 `internal/zen/core` 直接抬起来，没有窗口、托盘和 WebView2，因此镜像很小，任何一台装了 Docker 的 Linux 机器（含 NAS、VPS、旁路由）都能跑。
 
 - 想在 Windows 桌面上用带界面的版本：照旧用安装包，见 [README](../README.md)。
 - 想把网关挂在局域网/公网给别的设备用：就是本文。
@@ -9,10 +9,10 @@ Lamp Guide 的界面是 Win32 + WebView2 写的，只能跑在 Windows 上；**�
 
 | 有 | 没有 |
 | --- | --- |
-| `lamp-guide-server`（静态链接，非 root 运行） | Win32 窗口 / 托盘 / WebView2 |
-| `/v1/chat/completions`、`/v1/responses`、`/v1/messages` 等转发 | 桌面「网关」页那套管理界面 |
-| `/admin/api/*` 管理接口（JSON） | 一键自更新、开机自启 |
-| `/health` 健康检查 | agent 配置注入、sing-box 订阅代理 |
+| `lamp-guide-server`（静态链接，启动时纠属主再降权） | Win32 窗口 / 托盘 / WebView2 |
+| `/v1/chat/completions`、`/v1/responses`、`/v1/messages` 等转发 | 系统托盘菜单、窗口最大化/拖拽那几个按钮 |
+| `/admin` 里的浏览器版管理界面（渠道、模型、聚合、签到、日志、设置） | 一键自更新、开机自启 |
+| `/admin/api/*` 管理接口（JSON）、`/health` 健康检查 | agent 配置注入、sing-box 订阅代理 |
 
 最后一行是有意为之：容器里没有「装置」的概念，注入编辑器配置、替换自身二进制、拉起本地 sing-box 侧车都没有意义，也容易踩坑，所以容器入口用 `DisableDesktop` 把它们整体裁掉了。**订阅（订阅轮询 / 代理模式）在容器里不会生效**，需要直连或用宿主机的网络代理。
 
@@ -43,6 +43,34 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 ```
 
 只写 `docker build` 的话只出当前机器架构（amd64 机器上就是 `linux/amd64`）。二进制是 Go 静态交叉编译出来的，构建阶段不需要 QEMU 模拟 arm 跑编译器，运行也不需要模拟——真机直接跑。
+
+## Web 管理界面
+
+容器里没有 WebView2，但界面本身是普通网页（`web/` 那一套 HTML + JS），所以镜像会把它一起带上，用浏览器打开就行：
+
+```
+http://<宿主机>:8787/admin
+```
+
+- **在宿主机本机打开**（或用 `docker exec` / 反代到回环）：不用登录，`/admin` 直接跳到 `/admin/ui/`。
+- **从别的设备打开**：先去「管理接口」那一节把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成 `1`，然后页面会先要求输入**主密钥**（就是 `/v1` 用的那个 `mainKey`）。登录后拿一个 12 小时有效的会话 cookie，`HttpOnly` + `SameSite=Strict`；换主密钥（`key/rotate` 或改 `ZEN_GATE_KEY`）会让已有会话立刻失效。
+
+界面能做的事和桌面版一致：渠道登录/贴 Key、模型与聚合顺序、供应商、联网、签到、日志、用量、设置、导出/导入配置。少数只有桌面才做得成的动作会被换成等价路径：
+
+| 桌面版动作 | 浏览器里的样子 |
+| --- | --- |
+| 导出配置 → 选保存位置 | 直接下载到浏览器的下载目录 |
+| 导入配置 → 选文件 | 上传到数据目录的 `uploads/`，再由网关读它 |
+| 「打开文件夹」「用默认浏览器打开链接」 | 打不开宿主机的资源管理器；链接改成新标签页打开 |
+| 窗口最小化 / 最大化 / 拖拽 | 没有，那是浏览器的窗口 |
+
+几个细节：
+
+- 界面和 `/admin/api/*` 共用同一套权限：回环放行，远端要主密钥。界面内部走 `POST /admin/rpc`，语义等价于桌面版的消息桥，不会因为「在浏览器里」而多开一个口子。
+- `ZEN_GATE_ALLOW_REMOTE_ADMIN=0` 时，远端打开 `/admin` 会拿到 403（`admin is loopback-only`），这是故意的。
+- 反代（Nginx / Caddy）到公网时请把 HTTPS 一起配上，会话 cookie 不会自己变 Secure——明文 HTTP 暴露等于把主密钥明文送出去。
+- 界面本身是静态资源，`curl` 也能验证：`curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/admin/ui/`（回环下应得 `200`）。
+
 ## 不用容器，直接跑网关
 
 同一个入口也能在 Linux / macOS 上原生运行（单文件二进制，无外部依赖）：
@@ -268,7 +296,7 @@ curl -H "Authorization: Bearer $KEY" -X POST --data-binary @backup.json \
      http://<host>:8787/admin/api/import
 ```
 
-`/admin`（HTML）在容器里是一张占位页，会告诉你管理界面在桌面应用里——真正的面板不随镜像发布。打开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 之后，远端浏览器能打开这张说明页（浏览器发不出 `Authorization` 头，所以不要求密钥），但页面以下的所有 `/admin/api/*` 仍然要主密钥。要用图形界面就自己在前面套一层反向代理和自己的 UI，或者继续在 Windows 上用桌面版。
+`/admin`（HTML）就是上面那套浏览器版管理界面。回环打开直接进；打开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 之后远端浏览器能看到登录页，用主密钥换会话。界面内部的每一次调用走 `/admin/rpc`，服务端在进程内按回环形状发给 `/admin/api/*`——所以「界面能用」不代表「管理面没关门」，权限还是那一套：回环放行，远端认主密钥。
 
 > 安全提醒：`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 等于把管理面暴露给「知道主密钥的一切人」。别直接把 8787 挂到公网，套一层 HTTPS 反代（Nginx / Caddy / Traefik），并且定期 `key/rotate`。
 
@@ -304,6 +332,10 @@ docker run --rm -v lamp-guide-data:/data -v "$PWD:/backup" alpine \
 **提示没有渠道或供应商**：卷是空的。按上面的「把桌面应用里的配置搬进来」走一遍。
 
 **日志里有 `127.0.0.1:8095` 的绑定失败**：那是 Qoder 内置 hub 的可选端口，容器内就算占用了也不影响转发，可忽略。
+
+**打开 `/admin` 是 403 / 一直停在登录页**：403 说明 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 还是 `0`（远端只认回环）；停在登录页则是主密钥输错了，或者换了主密钥导致会话失效（刷新重登即可）。本机用 `docker exec lamp-guide wget -qO- http://127.0.0.1:8787/admin/ui/ | head -5` 能确认界面本身在不在。
+
+**界面里点「导出」没反应**：浏览器拦了下载？换个浏览器或允许该站点下载；导出的文件是网关生成的一次性令牌（10 分钟内有效、只能下一次）。
 
 **订阅/代理模式不生效**：见上文「镜像里有什么」——容器入口裁掉了 sing-box 侧车。要代理就在宿主机层面做（`HTTP_PROXY` 走宿主机的代理网关），或者别用容器。
 
