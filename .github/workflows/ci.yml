@@ -125,9 +125,10 @@ jobs:
           wait_health http://127.0.0.1:8789 || { docker logs lgperm; exit 1; }
           # 入口脚本的提示走 stderr，docker logs 要合并两路才 grep 得到。
           docker logs lgperm 2>&1 | grep -q '当前属主 0:0'
-          test -s permtest/config.json
-          echo "config.json owner=$(stat -c '%u:%g' permtest/config.json)"
-          test "$(stat -c '%u:%g' permtest/config.json)" = 10001:10001
+          # permtest 是 0700，属主已被入口脚本改成 10001，runner 用户进不去，断言必须借 sudo。
+          sudo test -s permtest/config.json
+          echo "config.json owner=$(sudo stat -c '%u:%g' permtest/config.json)"
+          test "$(sudo stat -c '%u:%g' permtest/config.json)" = 10001:10001
           # 降权之后进程本身是 10001，不是 root。
           test "$(proc_uid lgperm)" = 10001
           docker rm -f lgperm
