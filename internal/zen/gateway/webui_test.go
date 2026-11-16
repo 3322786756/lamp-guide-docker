@@ -178,8 +178,18 @@ func TestBrowserUIRemoteNeedsLogin(t *testing.T) {
 func TestBrowserUIRefusedWithoutOptIn(t *testing.T) {
 	s := newFenceServer(t)
 	w := do(s, remoteUIRequest("GET", "http://192.168.1.9:8787/admin", ""))
-	if w.Code != 403 || !strings.Contains(w.Body.String(), "loopback-only") {
+	if w.Code != 403 {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	// 拒绝的正文从一行 JSON 改成台头说明页：得告诉运维该设哪个环境变量。
+	if ct := w.Header().Get("content-type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("远端应当拿到说明页，实际 content-type=%q", ct)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"ZEN_GATE_ALLOW_REMOTE_ADMIN", "远端管理没有开启"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("说明页里没提到 %q:\n%s", want, body)
+		}
 	}
 	w = do(s, remoteUIRequest("POST", "http://192.168.1.9:8787/admin/login", `{"key":"x"}`))
 	if w.Code != 403 {

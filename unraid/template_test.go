@@ -252,3 +252,22 @@ func TestTemplateRunsAsConfigurableUser(t *testing.T) {
 		}
 	}
 }
+
+// 从 NAS 上点 WebUI 按钮是远端访问，opt-in 关着只会看到 403 说明页。既然这个模板
+// 就是给 NAS 面板点开用的，默认值必须把它打开；关闭由用户在面板里改回 0。
+func TestTemplateEnablesRemoteAdminByDefault(t *testing.T) {
+	tpl := loadTemplate(t)
+	for _, c := range tpl.Configs {
+		if c.Target != "ZEN_GATE_ALLOW_REMOTE_ADMIN" {
+			continue
+		}
+		if c.Default != "1" || strings.TrimSpace(c.Value) != "1" {
+			t.Fatalf("ZEN_GATE_ALLOW_REMOTE_ADMIN 默认应为 1（否则 NAS 上点 WebUI 只有 403）：Default=%q Value=%q", c.Default, c.Value)
+		}
+		if !strings.Contains(c.Description, "0") {
+			t.Errorf("说明里要写清楚设成 0 会怎样，实际 %q", c.Description)
+		}
+		return
+	}
+	t.Fatal("模板里没有 ZEN_GATE_ALLOW_REMOTE_ADMIN")
+}

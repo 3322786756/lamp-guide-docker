@@ -95,6 +95,13 @@ jobs:
           # 管理接口：宿主机访问发布端口时，容器看到的源地址是网桥地址（远端），
           # 所以默认必须拒绝——这正是「容器里管理接口不可用」的预期。
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" http://127.0.0.1:8787/admin/api/state)" = 403
+          # 同一个远端打开 /admin：状态还是 403，但正文必须是一页说明（写到哪个
+          # 环境变量），别再退化成一句 admin is loopback-only 的 JSON。
+          test "$(curl -s -o /tmp/admin-off.html -w '%{http_code}' http://127.0.0.1:8787/admin)" = 403
+          grep -qi '<html' /tmp/admin-off.html
+          grep -q 'ZEN_GATE_ALLOW_REMOTE_ADMIN' /tmp/admin-off.html
+          # 回环（容器内部）打开界面资源：直接 200，说明 403 只针对「远端 + 未开 opt-in」。
+          docker exec lg wget -qO- http://127.0.0.1:8787/admin/ui/ | grep -qi 'Lamp Guide'
           # SIGTERM：进程要自己收尾并以 0 退出，而不是被 15s 后 SIGKILL 掉（137）。
           docker stop -t 15 lg
           code=$(docker inspect --format '{{.State.ExitCode}}' lg)

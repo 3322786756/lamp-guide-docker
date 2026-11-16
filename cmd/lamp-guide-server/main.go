@@ -112,7 +112,7 @@ func report(c *core.Core, opts core.Options) {
 	if opts.AllowRemoteAdmin {
 		fmt.Printf("admin    http://<本机地址>:%d/admin/api/*  (需主密钥)\n", port)
 	} else {
-		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅回环；ZEN_GATE_ALLOW_REMOTE_ADMIN=1 才接受主密钥的远端调用)\n", port)
+		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机；远端浏览器/接口请设 ZEN_GATE_ALLOW_REMOTE_ADMIN=1)\n", port)
 	}
 	if envBool("ZEN_GATE_SHOW_KEY", false) {
 		fmt.Printf("key      %s\n", cfg.MainKey)

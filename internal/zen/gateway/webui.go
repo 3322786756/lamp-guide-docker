@@ -149,6 +149,12 @@ func (s *Server) webFence(w http.ResponseWriter, r *http.Request) bool {
 // The page-level gate is dashboardFence — the same one the old static page used,
 // so a host that never opted into remote admin still answers exactly as before.
 func (s *Server) serveBrowserUI(w http.ResponseWriter, r *http.Request) {
+	// 远端 + 宿主没开 opt-in：给一页门说明，而不是一句 「admin is
+	// loopback-only」——那句话看着像功能坏了，实际只是环境变量没设。
+	if !remoteIsLoopback(r) && !s.adminKeyRemote {
+		s.serveRemoteAdminOff(w, r)
+		return
+	}
 	if !s.dashboardFence(w, r) {
 		return
 	}
@@ -165,6 +171,61 @@ func (s *Server) serveBrowserUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("cache-control", "no-store")
 	w.Header().Set("x-content-type-options", "nosniff")
 	_, _ = w.Write(page)
+}
+
+// remoteAdminOffPage answers the one question a remote operator actually has
+// when the panel refuses them: what do I set, and where?
+const remoteAdminOffPage = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lamp Guide · 远端管理未开启</title>
+<style>
+  :root { color-scheme: dark }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #0f1115; color: #e6e8ee;
+         font: 15px/1.75 -apple-system, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif }
+  main { width: min(660px, calc(100vw - 40px)); padding: 30px 30px 26px;
+         background: #171a21; border: 1px solid #262b36; border-radius: 14px }
+  h1 { margin: 0 0 6px; font-size: 19px; letter-spacing: .2px }
+  .tag { display: inline-block; margin-bottom: 18px; padding: 2px 8px; border-radius: 999px;
+         background: #2a2113; border: 1px solid #574623; color: #e0b872; font-size: 12px }
+  p { margin: 10px 0 }
+  code { padding: 1px 6px; border-radius: 5px; background: #0b0d11; border: 1px solid #262b36; font-size: 13px }
+  pre { margin: 12px 0; padding: 12px 14px; overflow: auto; border-radius: 9px;
+        background: #0b0d11; border: 1px solid #262b36; font-size: 12.5px; line-height: 1.6 }
+  .dim { color: #8b93a7; font-size: 13.5px }
+  .sep { height: 1px; margin: 20px 0; background: #262b36 }
+</style>
+</head>
+<body>
+<main>
+  <span class="tag">403 · 仅限本机</span>
+  <h1>远端管理没有开启</h1>
+  <p>管理界面默认只给容器本机（回环地址）用。你现在是从别的设备访问，所以被挡在这里。</p>
+  <p><b>要从浏览器管理</b>：给容器加环境变量 <code>ZEN_GATE_ALLOW_REMOTE_ADMIN=1</code> 再重启，然后刷新这个地址，输入主密钥登录。</p>
+  <pre>docker run -d --name lamp-guide -p 8787:8787 \
+  -v lamp-guide-data:/data \
+  -e ZEN_GATE_ALLOW_REMOTE_ADMIN=1 \
+  ghcr.io/3322786756/lamp-guide-docker:latest</pre>
+  <p class="dim">Unraid：把模板里的「允许远端管理」改成 1，点应用（容器会重建）；compose：<code>ZEN_GATE_ALLOW_REMOTE_ADMIN: "1"</code>。</p>
+  <div class="sep"></div>
+  <p class="dim">不想对外开放也行：在 NAS 上 <code>ssh -L 8787:127.0.0.1:8787 root@nas</code>，再在本机打开 <code>http://127.0.0.1:8787/admin</code>，这样不需要开远端管理。</p>
+  <p class="dim">这个端口上的 <code>/v1</code>（模型接口）和 <code>/health</code> 不受影响，照旧可用。</p>
+</main>
+</body>
+</html>
+`
+
+// serveRemoteAdminOff renders that page. Status stays 403 so scripts and the
+// CI smoke checks keep seeing a refusal, only the body became readable.
+func (s *Server) serveRemoteAdminOff(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("content-type", "text/html; charset=utf-8")
+	w.Header().Set("cache-control", "no-store")
+	w.Header().Set("x-content-type-options", "nosniff")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w, remoteAdminOffPage)
 }
 
 // serveAssets serves web/ under /admin/ui/, with no directory listings: the
