@@ -10,18 +10,33 @@
 # 两个基础镜像的标签都做成可覆盖的构建参数：镜像仓库里的具体版本会随时间变化，
 # 你那边如果默认标签已经不适用，用 --build-arg 指过去就行，不必改文件。
 #   docker build --build-arg GO_IMAGE=golang:1.26 --build-arg RUNTIME_IMAGE=alpine:3.21 .
+#
+# 多架构：默认构建 linux/amd64（普通 docker build 即可）。要 amd64 + arm64 + armv7 一起出，
+# 用 buildx：
+#   docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t lamp-guide:latest --push .
+# 构建阶段始终跑在构建机架构上（$BUILDPLATFORM），靠 Go 的交叉编译产出目标架构二进制，
+# 不需要 QEMU 去模拟 arm 跑编译器。
 
 # ---------- 构建 ----------
 ARG GO_IMAGE=golang:1.26-alpine
 ARG RUNTIME_IMAGE=alpine:3.22
 
-FROM ${GO_IMAGE} AS build
+# BUILDPLATFORM 由 buildx 注入；直接 docker build 时回退成 amd64。
+ARG BUILDPLATFORM
+
+FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS build
 
 # 拉依赖。国内网络把 GOPROXY 换成 https://goproxy.cn,direct 即可：
 #   docker build --build-arg GOPROXY=https://goproxy.cn,direct -t lamp-guide:latest .
 ARG GOPROXY=https://proxy.golang.org,direct
+# TARGETOS/TARGETARCH/TARGETVARIANT 由 buildx 注入；直接 docker build 时回退成 linux/amd64。
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG TARGETVARIANT
+
 ENV CGO_ENABLED=0 \
-    GOOS=linux \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH} \
     GOPROXY=${GOPROXY} \
     GOTOOLCHAIN=local
 
@@ -34,7 +49,10 @@ RUN go mod download
 COPY . .
 
 # 静态链接 + 去掉符号表：产物直接跑在 alpine 上，不留 libc 依赖。
-RUN go build -trimpath -ldflags="-s -w" -o /out/lamp-guide-server ./cmd/lamp-guide-server
+# arm 32 位（arm/v7）要把 TARGETVARIANT 的 v7 传给 GOARM，否则默认按 ARMv6 出码。
+RUN if [ "${TARGETARCH}" = "arm" ] && [ -n "${TARGETVARIANT}" ]; then export GOARM="${TARGETVARIANT#v}"; fi; \
+    echo "building for GOOS=${GOOS} GOARCH=${GOARCH} GOARM=${GOARM:-默认}" && \
+    go build -trimpath -ldflags="-s -w" -o /out/lamp-guide-server ./cmd/lamp-guide-server
 
 # ---------- 运行 ----------
 FROM ${RUNTIME_IMAGE}

@@ -16,6 +16,33 @@ Lamp Guide 的界面是 Win32 + WebView2 写的，只能跑在 Windows 上；**�
 
 最后一行是有意为之：容器里没有「装置」的概念，注入编辑器配置、替换自身二进制、拉起本地 sing-box 侧车都没有意义，也容易踩坑，所以容器入口用 `DisableDesktop` 把它们整体裁掉了。**订阅（订阅轮询 / 代理模式）在容器里不会生效**，需要直连或用宿主机的网络代理。
 
+## 支持哪些架构
+
+镜像一次构建出三个架构，组成一个多架构清单，`docker pull` 会按宿主机自动挑：
+
+| 平台 | 典型设备 |
+| --- | --- |
+| `linux/amd64` | x86_64 服务器、x86 型号的群晖/威联通、Intel 芯的 Windows/macOS 上的 Docker Desktop |
+| `linux/arm64` | Apple Silicon 上的 Docker Desktop、树莓派 4/5 装 64 位系统、各类 arm64 小主机与 NAS |
+| `linux/arm/v7` | 树莓派 2/3/4 装 32 位系统、老一些的 arm 开发板 |
+
+```bash
+# 一般不用管架构，docker 会自己选
+docker pull ghcr.io/3322786756/lamp-guide-docker:latest
+
+# 想确认清单里有哪些平台 / 强制拉某个架构
+docker buildx imagetools inspect ghcr.io/3322786756/lamp-guide-docker:latest
+docker pull --platform linux/arm64 ghcr.io/3322786756/lamp-guide-docker:latest
+```
+
+自己构建多架构（需要 buildx）：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
+  -t lamp-guide:latest --push .
+```
+
+只写 `docker build` 的话只出当前机器架构（amd64 机器上就是 `linux/amd64`）。二进制是 Go 静态交叉编译出来的，构建阶段不需要 QEMU 模拟 arm 跑编译器，运行也不需要模拟——真机直接跑。
 ## 不用容器，直接跑网关
 
 同一个入口也能在 Linux / macOS 上原生运行（单文件二进制，无外部依赖）：
@@ -72,7 +99,43 @@ docker run -d --name lamp-guide -p 8787:8787 -v lamp-guide-data:/data \
   ghcr.io/3322786756/lamp-guide-docker:latest
 ```
 
-GHCR 里的包默认是私有的：第一次拉之前，去仓库的 Packages 页面把它改成 public，或者先 `docker login ghcr.io`。
+现在这个包是公开的，`docker pull` 不需要登录。换成你自己的仓库时注意：新建的 GHCR 包默认私有，要先去仓库的 Packages 页面点一次 public，或者先 `docker login ghcr.io`。
+
+### 在 Unraid 里安装
+
+仓库里带了一份 Unraid 模板：[`unraid/lamp-guide.xml`](../unraid/lamp-guide.xml)。它用 bridge 网络、把 `/data` 指到 `/mnt/user/appdata/lamp-guide`，并把几个环境变量做成了表单字段。
+
+两种装法：
+
+```bash
+# 1) 命令行下载到 Unraid 的用户模板目录，然后在 Docker 页「Add Container」里选它
+mkdir -p /boot/config/plugins/dockerMan/templates-user
+wget -O /boot/config/plugins/dockerMan/templates-user/lamp-guide.xml \
+  https://raw.githubusercontent.com/3322786756/lamp-guide-docker/main/unraid/lamp-guide.xml
+```
+
+也可以直接在 Docker 页右下角的「Template」处粘贴上面的模板地址，效果相同。
+
+模板里的几个字段：
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| WebUI 端口 | `8787` | 宿主端口；容器内部固定监听 8787 |
+| 数据目录 | `/mnt/user/appdata/lamp-guide` | 网关全部状态，务必在 appdata 里并被备份覆盖 |
+| 主密钥 | 空 | 留空则首次启动生成随机密钥，可从容器日志拿 |
+| 允许远端管理 | `0` | 想从别的电脑用浏览器调 `/admin/api/*` 才改成 1（仍需主密钥） |
+
+镜像内以 uid `10001` 运行。如果日志里出现无法写入数据目录，在 Unraid 终端执行：
+
+```bash
+chown -R 10001:10001 /mnt/user/appdata/lamp-guide
+```
+
+只想看网关活着没有、又不想开远端管理，可以让容器自己问自己（回环地址无需密钥）：
+
+```bash
+docker exec -it lamp-guide wget -qO- http://127.0.0.1:8787/admin/api/state
+```
 
 ## 拿到主密钥
 

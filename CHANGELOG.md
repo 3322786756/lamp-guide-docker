@@ -8,9 +8,11 @@
 - 新增多阶段 `Dockerfile`（静态链接、非 root、`/data` 数据卷、内置 `HEALTHCHECK` 打 `/health`）与 `docker-compose.yml`。
 - 新增 `internal/zen/core` 的两个可选参数：`AllowLan` 让容器监听所有网卡（仅本次运行生效，不写回配置），`AllowRemoteAdmin` 允许远端的 `/admin/api` 以主密钥作为凭证；回环调用方的原有校验逻辑一字未改，远端仍默认拒绝。打开后远端浏览器可以打开 `/admin` 那张静态说明页（浏览器发不出凭据头），数据接口仍只认主密钥。
 - 新增 `docs/DOCKER.md`：从桌面应用导出配置进容器、主密钥获取、环境变量、管理接口开放方式、反向代理与安全提示、常见问题。
+- 镜像支持多架构：一次构建出 `linux/amd64`、`linux/arm64`、`linux/arm/v7`（树莓派 32 位），CI 用 buildx 推多架构清单；构建阶段靠 Go 交叉编译，不需要 QEMU 模拟 arm 跑编译器。
 - CI 增加镜像发布作业：push 到 `main` 后自动构建并推送 GHCR（`ghcr.io/<owner>/<repo>`）；仓库里配好 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` / `DOCKERHUB_REPO` 时同一次运行顺带推 Docker Hub。
 - 无界面入口支持 `ZEN_GATE_KEY` 自定义主密钥：启动时写入 `config.json` 并沿用，省去从日志里翻随机密钥；运行中仍可用 `POST /admin/api/key/rotate` 更换。
 - CI 增加 Linux 构建与容器冒烟作业（`go vet` 网关包、构建镜像、起容器验 `/health` 与卷内 `config.json`）。
+- 新增 Unraid Docker 模板 `unraid/lamp-guide.xml`（bridge 网络、`/data` 指到 appdata、主密钥等字段表单化），并加 `unraid` 包测试锁住模板与镜像定义一致（端口 8787、卷 `/data`、环境变量名、图标与模板地址）。
 
 ## Lamp Guide 1.2.1 — 2026-11-06
 

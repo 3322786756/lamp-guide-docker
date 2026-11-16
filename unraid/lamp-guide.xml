@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>lamp-guide</Name>
+  <Repository>ghcr.io/3322786756/lamp-guide-docker:latest</Repository>
+  <Registry>https://github.com/3322786756/lamp-guide-docker/pkgs/container/lamp-guide-docker</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/3322786756/lamp-guide-docker/issues</Support>
+  <Project>https://github.com/3322786756/lamp-guide-docker</Project>
+  <Overview>Lamp Guide 网关（无界面版）：把模型渠道、供应商和 Agent 收进一个 OpenAI / Anthropic 兼容的本地入口，供其它程序调用。&#13;&#10;容器里只跑网关，没有桌面窗口；镜像同时提供 linux/amd64、linux/arm64、linux/arm/v7。&#13;&#10;&#13;&#10;装好后：&#13;&#10;1. 填「主密钥」（也可以用默认的随机密钥，从容器日志里看）；&#13;&#10;2. 客户端 Base URL 填 http://你的NAS地址:8787/v1，Key 填主密钥；&#13;&#10;3. 管理接口是 /admin/api/*，默认只认容器内回环地址，要用浏览器从局域网访问请把「允许远端管理」改成 1（仍需要主密钥）。&#13;&#10;&#13;&#10;渠道登录、用量和配置都在「数据目录」里，务必挂到 appdata 并做好备份。详细说明见项目 docs/DOCKER.md。</Overview>
+  <Category>Network:Other Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:8787]/admin</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/3322786756/lamp-guide-docker/main/unraid/lamp-guide.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/3322786756/lamp-guide-docker/main/packaging/assets/lamp-guide.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText>如果这个网关对你有帮助，可以请作者喝杯咖啡。</DonateText>
+  <DonateLink>https://github.com/3322786756/lamp-guide-docker</DonateLink>
+  <Config Name="WebUI 端口" Target="8787" Default="8787" Mode="tcp" Description="容器内部固定监听 8787，这里填宿主机端口。改了宿主端口不用动容器里的端口。" Type="Port" Display="always" Required="true" Mask="false">8787</Config>
+  <Config Name="数据目录" Target="/data" Default="/mnt/user/appdata/lamp-guide" Mode="rw" Description="网关的全部状态：config.json（渠道登录、供应商、主密钥）、stats.json、日志。不挂载的话重建容器就清零。" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/lamp-guide</Config>
+  <Config Name="主密钥" Target="ZEN_GATE_KEY" Default="" Mode="" Description="所有 /v1 请求的凭据，建议填 32 位以上随机串（例如 openssl rand -hex 24）。留空则首次启动自动生成随机密钥，可在容器日志里看到前 8 位，或用「启动日志显示完整密钥」临时打印。" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="允许远端管理" Target="ZEN_GATE_ALLOW_REMOTE_ADMIN" Default="0" Mode="" Description="0 = 管理接口只认容器内回环地址；1 = 允许从局域网调 /admin/api/*，凭据是主密钥，且写操作仍校验来源站点。要把 WebUI 按钮从别的电脑点开，需要设为 1。" Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="允许局域网访问" Target="ZEN_GATE_ALLOW_LAN" Default="1" Mode="" Description="1 = 监听 0.0.0.0（bridge 端口映射需要）；0 = 只监听容器内 127.0.0.1，外部访问不到。" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="启动日志显示完整密钥" Target="ZEN_GATE_SHOW_KEY" Default="0" Mode="" Description="1 = 启动时在日志里打印完整主密钥，方便拿到的同时也会留在日志里，看完记得改回 0。" Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode="" Description="日志时间与用量统计按这个时区落盘。" Type="Variable" Display="advanced" Required="false" Mask="false">Asia/Shanghai</Config>
+  <Config Name="容器内端口" Target="ZEN_GATE_PORT" Default="8787" Mode="" Description="通常不用改。改了这里，上面的「WebUI 端口」映射目标也要跟着改。" Type="Variable" Display="advanced" Required="false" Mask="false">8787</Config>
+  <Config Name="说明" Target="lamp-guide-notes" Default="" Mode="" Description="" Type="Label" Display="always" Required="false" Mask="false">**首次安装注意**&#13;&#10;&#13;&#10;- 镜像内以 uid 10001 运行。如果容器日志提示无法写入数据目录，在 Unraid 终端执行 `chown -R 10001:10001 /mnt/user/appdata/lamp-guide` 后重启容器。&#13;&#10;- 不想开远端管理、只想看状态时，可以在终端里用容器自身的回环地址：`docker exec -it lamp-guide wget -qO- http://127.0.0.1:8787/admin/api/state`。&#13;&#10;- 这个 WebUI 是静态说明页，真正的管理操作走 `/admin/api/*`（例如 `POST /admin/api/reprobe`、`GET /admin/api/export?secrets=1`）。&#13;&#10;- 渠道登录需要联网，容器里没有桌面窗口，渠道请在桌面版里登录后导出配置，再 `POST /admin/api/import` 导入；做法见 docs/DOCKER.md。</Config>
+</Container>

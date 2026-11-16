@@ -2,20 +2,77 @@
   <img src="web/assets/lamp-guide.svg" width="112" height="112" alt="Lamp Guide 灯笼图标">
 </p>
 
-<h1 align="center">Lamp Guide</h1>
-<p align="center"><strong>把 AI 模型、渠道和 Agent，收进一个桌面窗口。</strong></p>
-<p align="center">zen-gate 的 Windows 桌面重构版本 · Go + Win32 + WebView2</p>
+<h1 align="center">Lamp Guide 网关镜像</h1>
+<p align="center"><strong>把 Lamp Guide 的网关装进容器：无界面、多架构、一条命令起跑。</strong></p>
+<p align="center">上游 <a href="https://github.com/LAGcomcom/Lamp-Guide">LAGcomcom/Lamp-Guide</a> 的容器化分支 · Go + 无界面入口 + Docker</p>
 <p align="center">
-  <a href="https://github.com/LAGcomcom/Lamp-Guide/releases/latest">下载安装包</a> ·
-  <a href="https://github.com/LAGcomcom/Lamp-Guide-Android">安卓原生版</a> ·
-  <a href="docs/MIGRATION.md">从 zen-gate 迁移</a> ·
-  <a href="https://github.com/LAGcomcom/Lamp-Guide/issues">反馈问题</a> ·
-  <a href="https://github.com/LAGcomcom/zen-gate">原版 zen-gate</a>
+  <a href="https://github.com/3322786756/lamp-guide-docker/pkgs/container/lamp-guide-docker">容器镜像</a> ·
+  <a href="docs/DOCKER.md">Docker 使用说明</a> ·
+  <a href="https://github.com/LAGcomcom/Lamp-Guide">上游桌面版</a> ·
+  <a href="https://github.com/LAGcomcom/Lamp-Guide-Android">安卓原生版</a>
 </p>
 
-Lamp Guide 基于 [zen-gate](https://github.com/LAGcomcom/zen-gate) 继续开发，将网关与桌面界面整合进一个进程。你可以在窗口里登录渠道、管理模型、配置代理、接入 Agent，并通过兼容 OpenAI / Anthropic 的本地入口调用模型。
+Lamp Guide 原本是 Windows 桌面应用：界面用 Win32 + WebView2，网关和界面跑在同一个进程里。本仓库在它基础上补了一层**无界面入口**，让网关单独跑在 Linux 容器里——NAS、VPS、旁路由、树莓派都能当模型网关用，客户端填 `http://<主机>:8787/v1` 就能按 OpenAI / Anthropic 协议调用。
 
-**项目关系：** zen-gate 保留原版源码与发布记录；Lamp Guide 在本仓库独立迭代。两者版本号分别计算，Lamp Guide `1.2.0` 是重构版版本号，不表示 zen-gate `1.10.0` 的降级。当前重构版提供 Windows 10 / 11 x64 安装包；安卓原生客户端在独立仓库 [Lamp Guide Android](https://github.com/LAGcomcom/Lamp-Guide-Android) 维护与发布，其他平台请使用原仓库。
+容器里没有窗口、托盘和 WebView2，所以镜像很小；反过来，桌面版专有的功能（Agent 配置注入、应用自更新、sing-box 订阅应用）在容器里不生效，取舍和替代做法见 [docs/DOCKER.md](docs/DOCKER.md)。
+
+## 快速开始
+
+```bash
+docker run -d --name lamp-guide \
+  -p 8787:8787 -v lamp-guide-data:/data \
+  -e ZEN_GATE_KEY=换成你自己的长随机串 \
+  ghcr.io/3322786756/lamp-guide-docker:latest
+
+docker logs lamp-guide          # 启动日志里有 API 地址和主密钥提示
+curl http://127.0.0.1:8787/health
+```
+
+也可以用仓库里的 `docker-compose.yml`：`docker compose up -d`。
+
+Unraid 用户有现成模板：[`unraid/lamp-guide.xml`](unraid/lamp-guide.xml)，下载到用户模板目录或在 Docker 页粘贴模板地址即可，细节见 [docs/DOCKER.md](docs/DOCKER.md)。
+
+`/data` 是网关的全部状态（`config.json`：渠道登录、供应商、主密钥、用量统计），**卷不挂，重建即清零**。
+
+## 支持哪些架构
+
+一次构建出三份，`docker pull` 会按宿主机架构自动挑，不用加 `--platform`：
+
+| 平台 | 典型设备 |
+| --- | --- |
+| `linux/amd64` | x86 服务器、NAS、普通 PC |
+| `linux/arm64` | 树莓派 4/5、ARM 云主机、Apple Silicon |
+| `linux/arm/v7` | 树莓派 2/3、老 ARM 盒子 |
+
+构建阶段跑在构建机原生架构上，靠 Go 交叉编译出目标架构二进制，不需要 QEMU 模拟编译器。
+
+## 和上游的差别
+
+| 改动 | 说明 |
+| --- | --- |
+| `cmd/lamp-guide-server` | 无界面入口：读环境变量、打印地址与密钥、收到 SIGTERM 干净退出 |
+| `Dockerfile` / `docker-compose.yml` / `.dockerignore` | 多阶段构建、静态二进制、非 root 用户、HEALTHCHECK、多架构 |
+| 远端管理开关 | 管理接口仍默认只认回环；`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 时远端请求改用主密钥校验 |
+| `ZEN_GATE_KEY` | 启动时用自己的主密钥覆盖 `config.json` 里的随机密钥，省去从日志里翻 |
+| CI | 在 GitHub Actions 里真机构建镜像、起容器冒烟，再推 GHCR 多架构清单 |
+
+## 环境变量
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `ZEN_GATE_KEY` | 空 | 自定义主密钥；设了就写进 `config.json`，之后启动一直沿用 |
+| `ZEN_GATE_HOME` | `/data` | 数据目录，必须指向挂卷的位置 |
+| `ZEN_GATE_PORT` | `8787` | 监听端口 |
+| `ZEN_GATE_ALLOW_LAN` | `1` | 监听 `0.0.0.0`，允许局域网访问 |
+| `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `0` | 允许远端用主密钥调 `/admin/api/*` |
+| `ZEN_GATE_SHOW_KEY` | `0` | 启动日志里打印完整主密钥 |
+| `TZ` | `Asia/Shanghai` | 容器时区 |
+
+把桌面应用里已登录的渠道搬进容器、管理接口的调用示例、反向代理与证书、常见问题，都在 [docs/DOCKER.md](docs/DOCKER.md)。
+
+---
+
+## 以下是上游 Lamp Guide 桌面版说明
 
 ## 有什么变化
 
@@ -81,20 +138,14 @@ go build -trimpath -ldflags="-H=windowsgui" -o LampGuide.exe .
 
 ### 在 Docker 里跑网关
 
-界面是 Win32 + WebView2，只能跑在 Windows 上；容器里跑的是网关本身——`cmd/lamp-guide-server`，没有窗口、托盘和 WebView2，因此镜像很小，NAS、VPS、旁路由都能跑：
-
-```bash
-docker compose up -d
-docker compose logs -f      # 启动日志里有 API 地址与主密钥提示
-```
-
-`/data` 是网关的全部状态（配置、渠道登录、用量），必须挂卷。把桌面应用里已登录的渠道迁进容器、开放管理接口、环境变量清单和常见问题，见 [用 Docker 跑 Lamp Guide 网关](docs/DOCKER.md)。
+界面是 Win32 + WebView2，只能跑在 Windows 上；容器里跑的是网关本身——`cmd/lamp-guide-server`，没有窗口、托盘和 WebView2。开箱用法、环境变量和迁移已有渠道的步骤见上面的[快速开始](#快速开始)与 [docs/DOCKER.md](docs/DOCKER.md)；从源码构建镜像用仓库里的 `Dockerfile`，多架构用 `docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7`。
 
 | 目录 | 职责 |
 | --- | --- |
 | `main.go`、`identity_windows.go` | 进程入口与 Windows 应用身份 |
 | `cmd/lamp-guide-server` | 无界面网关入口，容器镜像的启动命令 |
 | `Dockerfile`、`docker-compose.yml` | 网关镜像与本地编排 |
+| `unraid` | Unraid Docker 模板（`lamp-guide.xml`） |
 | `internal/shell`、`internal/native` | Win32 窗口、WebView2 宿主与系统调用 |
 | `internal/host`、`internal/zenbridge` | 页面宿主接口及进程内管理请求 |
 | `internal/zen` | 网关、渠道、账号、模型聚合、路由及配置存储 |
