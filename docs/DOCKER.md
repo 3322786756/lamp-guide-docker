@@ -1,0 +1,220 @@
+# 用 Docker 跑 Lamp Guide 网关
+
+Lamp Guide 的界面是 Win32 + WebView2 写的，只能跑在 Windows 上；**进容器的是网关**——也就是那些 OpenAI / Anthropic 兼容的 `/v1` 接口。容器里的进程叫 `lamp-guide-server`，由 `internal/zen/core` 直接抬起来，不带窗口、托盘和 WebView2，因此镜像很小，任何一台装了 Docker 的 Linux 机器（含 NAS、VPS、旁路由）都能跑。
+
+- 想在 Windows 桌面上用带界面的版本：照旧用安装包，见 [README](../README.md)。
+- 想把网关挂在局域网/公网给别的设备用：就是本文。
+
+## 镜像里有什么
+
+| 有 | 没有 |
+| --- | --- |
+| `lamp-guide-server`（静态链接，非 root 运行） | Win32 窗口 / 托盘 / WebView2 |
+| `/v1/chat/completions`、`/v1/responses`、`/v1/messages` 等转发 | 桌面「网关」页那套管理界面 |
+| `/admin/api/*` 管理接口（JSON） | 一键自更新、开机自启 |
+| `/health` 健康检查 | agent 配置注入、sing-box 订阅代理 |
+
+最后一行是有意为之：容器里没有「装置」的概念，注入编辑器配置、替换自身二进制、拉起本地 sing-box 侧车都没有意义，也容易踩坑，所以容器入口用 `DisableDesktop` 把它们整体裁掉了。**订阅（订阅轮询 / 代理模式）在容器里不会生效**，需要直连或用宿主机的网络代理。
+
+## 不用容器，直接跑网关
+
+同一个入口也能在 Linux / macOS 上原生运行（单文件二进制，无外部依赖）：
+
+```bash
+CGO_ENABLED=0 go build -trimpath -o lamp-guide-server ./cmd/lamp-guide-server
+ZEN_GATE_HOME=$HOME/.local/share/zen-gate ./lamp-guide-server
+```
+
+它不读任何桌面缓存，只认 `ZEN_GATE_HOME` 下的 `config.json`；日志直接打到 stdout，`Ctrl-C` / `SIGTERM` 退出。用 systemd 托管的话，`Restart=always` 加上一个指向数据目录的 `Environment=ZEN_GATE_HOME=...` 就够了。
+
+## 快速开始
+
+```bash
+# 方式一：compose（推荐）
+docker compose up -d
+docker compose logs -f          # 启动那几行里有 API 地址和主密钥提示
+
+# 方式二：手搓
+docker build -t lamp-guide:latest .
+docker run -d --name lamp-guide \
+  -p 8787:8787 \
+  -v lamp-guide-data:/data \
+  lamp-guide:latest
+```
+
+`/data` 是网关的全部状态（`config.json`：渠道登录、供应商、主密钥、用量统计）。**卷不挂，重建即清零。**
+
+首次启动的日志长这样（第一段是网关自己的日志，后面四行是这个入口打印的摘要）：
+
+```
+[2026-11-16 00:17:25.848] [INFO] {app} zen-gate 1.2.1 启动 (port 8787, proxy env)
+[2026-11-16 00:17:25.851] [INFO] {app} dashboard ready at http://127.0.0.1:8787
+lamp-guide-server 1.2.1 · go go1.26.11 · data /data
+API      http://172.17.0.5:8787/v1  (OpenAI/Anthropic 兼容；其它设备填这个地址)
+admin    http://127.0.0.1:8787/admin  (仅回环；ZEN_GATE_ALLOW_REMOTE_ADMIN=1 才接受主密钥的远端调用)
+key      ofm-AbCd…  (ZEN_GATE_SHOW_KEY=1 可打印完整主密钥)
+注意: 数据目录里没有任何渠道或供应商。...
+```
+
+容器里那行 `API` 打出来的是容器自己的网段地址，别照抄——对外要用宿主机的 IP 和发布出去的端口。
+
+### 用 CI 构建好的镜像
+
+这个仓库的 GitHub Actions 在每次 push 到 `main` 时会构建镜像并发布：
+
+- 一定推送 GHCR：`ghcr.io/<owner>/<repo>:latest`，同时打一个 `:<短 sha>` 标签
+- 仓库里配好 `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN`（Secrets）和 `DOCKERHUB_REPO`（Variables）后，同一次运行会顺带推 Docker Hub
+
+```bash
+docker pull ghcr.io/3322786756/lamp-guide-docker:latest
+docker run -d --name lamp-guide -p 8787:8787 -v lamp-guide-data:/data \
+  -e ZEN_GATE_KEY=换成你自己的长随机串 \
+  ghcr.io/3322786756/lamp-guide-docker:latest
+```
+
+GHCR 里的包默认是私有的：第一次拉之前，去仓库的 Packages 页面把它改成 public，或者先 `docker login ghcr.io`。
+
+## 拿到主密钥
+
+密钥就是所有 `/v1` 请求的凭据。三种拿法，任选：
+
+```bash
+# 1. 临时把密钥打进日志（看完记得改回 0；日志会留在宿主机上）
+docker run --rm -e ZEN_GATE_SHOW_KEY=1 -v lamp-guide-data:/data ...   # 或在 compose 里改环境变量后 up -d
+
+# 2. 直接读卷里的 config.json
+docker compose exec lamp-guide cat /data/config.json | grep MainKey
+
+# 3. 已经有密钥、只想换一个
+curl -X POST -H "Authorization: Bearer $ZEN_GATE_KEY" \
+  http://<host>:8787/admin/api/key/rotate
+```
+
+密钥长得像 `ofm-` 开头加 24 字节随机串，等同于账号密码：`config.json` 里还躺着各渠道的登录凭据，这个目录按密钥对待。
+
+### 用自己的密钥
+
+不想让容器随机生成、也不想从日志里去翻，就直接指定（自建部署、团队共用、接入既有客户端时更方便）：
+
+```bash
+docker run -d --name lamp-guide \
+  -p 8787:8787 -v lamp-guide-data:/data --restart unless-stopped \
+  -e ZEN_GATE_KEY=my-team-gateway-key-9f3a1c7b \
+  lamp-guide:latest
+```
+
+- 设了 `ZEN_GATE_KEY` 就以它为准：启动时写进 `config.json`，**之后不带这个变量重启也沿用**，客户端的 Key 不会莫名其妙失效。
+- 值里不能有空白或引号；短于 16 个字符照样接受，但会在 stderr 提醒一句——这个字符串就是 `/v1` 的唯一凭据。
+- 想换就再启一次带新值的 `ZEN_GATE_KEY`，或者在运行中调 `POST /admin/api/key/rotate` 让网关自己生成一个新的。
+- 介意密钥出现在 `docker inspect`/compose 文件里，就用 env 文件或密钥管理：
+
+```bash
+# env 文件（记得 chmod 600，并且别入库）
+printf 'ZEN_GATE_KEY=%s\n' "$(openssl rand -hex 24)" > lamp-guide.env
+docker run -d --name lamp-guide --env-file lamp-guide.env \
+  -p 8787:8787 -v lamp-guide-data:/data lamp-guide:latest
+```
+
+## 把桌面应用里的配置搬进来
+
+容器里没有界面，所以要复用已经在 Windows 上登录好的渠道，最省事的路径是「导出配置 → 挂进容器」：
+
+```bash
+# 在 Windows 上（桌面应用正在运行，KEY 是它的主密钥）
+curl "http://127.0.0.1:8787/admin/api/export?secrets=1" \
+     -H "Authorization: Bearer $KEY" -o config.json
+# 注意必须带 ?secrets=1，否则导出的是掩码版，凭据会被当成「未配置」。
+```
+
+然后把 `config.json` 放到容器的 `/data/config.json`：
+
+```bash
+# compose：把 volumes 换成宿主机目录那一行（./data:/data），再
+mkdir -p ./data && cp config.json ./data/config.json
+docker compose up -d
+
+# 或者具名卷
+docker compose cp config.json lamp-guide:/data/config.json
+docker compose restart lamp-guide
+```
+
+也可以反过来推：让容器先跑起来，再用 `POST /admin/api/import` 把配置推进去（需要 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 加主密钥，见下节）。导入接口会校验并保留本机的绑定端口，掩码占位符会落成「未配置」而不是假凭据。
+
+> 渠道登录态（尤其免费通道的 OAuth）会过期，过期后容器里没法点按钮重新登录：重新在桌面应用里登录一次，再导出一遍配置覆盖进卷里即可。
+
+## 环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `ZEN_GATE_HOME` | `/data`（镜像内置） | 数据目录，配置/日志/用量都在这里 |
+| `ZEN_GATE_PORT` | 配置里的端口，首次是 `8787` | 容器内监听端口；改这里记得同步改 `-p` |
+| `ZEN_GATE_ALLOW_LAN` | `1` | 监听 `0.0.0.0`。设 `0` 只监听回环——容器里那样就没人连得上了 |
+| `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `0` | 允许非回环地址访问 `/admin/api`（凭主密钥），见下节 |
+| `ZEN_GATE_SHOW_KEY` | `0` | 启动时把完整主密钥打进日志 |
+| `ZEN_GATE_KEY` | 空 | 自定义主密钥；设了就写进 `config.json`，之后启动一直沿用它 |
+| `TZ` | `Asia/Shanghai` | 时区，影响日志与用量统计的时间戳 |
+
+布尔量接受 `1/true/yes/on` 与 `0/false/no/off`；写别的值会在日志里提示并回落到默认值。
+
+## 管理接口
+
+`/admin/api/*` 原本是「只认回环」的：桌面应用从本机页面调它，这条约束同时挡住 DNS rebinding 和跨站请求。容器里每个请求都来自网桥地址（例如 `172.17.0.1`），回环判定永远不成立——所以默认情况下管理接口在容器里**不可用**，网关照常转发，只是改不了配置。
+
+要用就走显式开关：
+
+```yaml
+environment:
+  ZEN_GATE_ALLOW_REMOTE_ADMIN: "1"
+```
+
+打开后，远端调用方必须出示**主密钥**（`Authorization: Bearer <MainKey>` 或 `x-api-key`），并且 POST 的 `Origin`/`Referer`（如果带了）必须与请求地址同源——和原来的跨站规则一模一样，只是把「你在本机」换成了「你拿着主密钥」。回环调用方走的还是老逻辑，一点没变；没打开这个开关时，远端依旧一律 403。桌面版不会打开它。
+
+```bash
+KEY=$(docker compose exec -T lamp-guide grep -o '"mainKey": *"[^"]*"' /data/config.json | cut -d'"' -f4)
+curl -H "Authorization: Bearer $KEY" http://<host>:8787/admin/api/state      # 看状态
+curl -H "Authorization: Bearer $KEY" "http://<host>:8787/admin/api/usage.csv"  # 用量
+curl -H "Authorization: Bearer $KEY" "http://<host>:8787/admin/api/export?secrets=1" -o backup.json
+curl -H "Authorization: Bearer $KEY" -X POST --data-binary @backup.json \
+     http://<host>:8787/admin/api/import
+```
+
+`/admin`（HTML）在容器里是一张占位页，会告诉你管理界面在桌面应用里——真正的面板不随镜像发布。打开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 之后，远端浏览器能打开这张说明页（浏览器发不出 `Authorization` 头，所以不要求密钥），但页面以下的所有 `/admin/api/*` 仍然要主密钥。要用图形界面就自己在前面套一层反向代理和自己的 UI，或者继续在 Windows 上用桌面版。
+
+> 安全提醒：`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 等于把管理面暴露给「知道主密钥的一切人」。别直接把 8787 挂到公网，套一层 HTTPS 反代（Nginx / Caddy / Traefik），并且定期 `key/rotate`。
+
+## 给别的设备用
+
+```bash
+# 同一局域网里的手机 / 另一台电脑
+curl http://<宿主机IP>:8787/v1/models -H "Authorization: Bearer ofm-..."
+```
+
+客户端里把 `Base URL` 填 `http://<宿主机IP>:8787/v1`，API Key 填主密钥即可；Anthropic 协议走 `/v1/messages`，OpenAI 协议走 `/v1/chat/completions` 和 `/v1/responses`。
+
+只想本机用，就把 compose 的端口映射改成 `"127.0.0.1:8787:8787"`，此时远端连管理接口都没必要打开。
+
+## 运维
+
+```bash
+docker compose logs -f                       # 日志走 stdout，由 Docker 收集
+docker compose exec lamp-guide wget -qO- http://127.0.0.1:8787/health   # {"ok":true,"service":"zen-gate"}
+docker compose build --pull && docker compose up -d                     # 升级镜像
+docker run --rm -v lamp-guide-data:/data -v "$PWD:/backup" alpine \
+  tar czf /backup/lamp-guide-data.tgz -C /data .                        # 备份卷
+```
+
+镜像自带 `HEALTHCHECK`：容器状态变成 `healthy` 才代表端口通了、配置加载完了；`unhealthy` 先看日志里是不是渠道全部失效或端口被占。
+
+## 常见问题
+
+**启动日志说端口占用**：容器内 8787 被别的进程占了，或者宿主机端口没映射对。改 `ZEN_GATE_PORT` 的同时要改 `-p 新端口:新端口`（容器内端口就是配置里那个）。
+
+**`/v1` 一律 401**：密钥不对。注意别把渠道的 API Key 当成网关主密钥——网关只认 `config.json` 里的 `mainKey`（以及 `agentKeys` 里的子密钥）。
+
+**提示没有渠道或供应商**：卷是空的。按上面的「把桌面应用里的配置搬进来」走一遍。
+
+**日志里有 `127.0.0.1:8095` 的绑定失败**：那是 Qoder 内置 hub 的可选端口，容器内就算占用了也不影响转发，可忽略。
+
+**订阅/代理模式不生效**：见上文「镜像里有什么」——容器入口裁掉了 sing-box 侧车。要代理就在宿主机层面做（`HTTP_PROXY` 走宿主机的代理网关），或者别用容器。
+
+**想让容器跟着系统代理出去**：`docker run -e HTTP_PROXY=... -e HTTPS_PROXY=...`，网关的上游请求会走标准库的 `ProxyFromEnvironment` 链路；具体是否生效取决于选中的渠道实现。

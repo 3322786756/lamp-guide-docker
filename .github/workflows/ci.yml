@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Check JavaScript syntax
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem web,tools -Recurse -File -Include *.js,*.cjs,*.mjs
+          foreach ($file in $files) {
+            node --check $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $file" }
+          }
+      - name: Build application
+        run: go build -trimpath -ldflags="-H=windowsgui" -o LampGuide.exe .
+
+  # 容器镜像这条路没有别的检查兜底：只有网关包能编到 linux，只有镜像起来
+  # 之后 /health 才会真的应答。两者都在这里跑一遍。
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      # 桌面层（internal/shell、internal/native、internal/host）只有 Windows 实现，
+      # 所以 linux 上不能 go vet ./...：范围收到网关与无界面入口。
+      - name: Vet gateway and headless entry
+        run: go vet ./internal/zen/... ./cmd/...
+      - name: Build headless gateway for linux
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath ./cmd/lamp-guide-server
+      - name: Build image
+        run: docker build -t lamp-guide:ci .
+      # 下面这些断言都是本地 Windows 机器上验不了的那部分：镜像层、非 root、
+      # busybox 探针、容器内的远端管理语义、SIGTERM 收尾。
+      - name: Smoke test container
+        run: |
+          set -euo pipefail
+          docker run -d --name lg -p 8787:8787 lamp-guide:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8787/health | grep -q '"ok":true' && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8787/health | grep -q '"ok":true'
+          echo "--- boot log ---"
+          docker logs lg
+          # 首次启动必须把 config.json 落到卷目录：那是网关的全部状态。
+          docker exec lg sh -c 'test -s /data/config.json'
+          # 非 root 运行，且数据目录归它所有。
+          test "$(docker exec lg id -u)" = 10001
+          # HEALTHCHECK 要真的翻成 healthy：alpine 里只有 busybox 的 wget，
+          # 探针命令写错（比如被 HTTP_PROXY 劫持）会在这里卡成 unhealthy。
+          status=starting
+          for _ in $(seq 1 24); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' lg)
+            [ "$status" = healthy ] && break
+            sleep 5
+          done
+          echo "health=$status"
+          test "$status" = healthy
+          # 鉴权：无 key 401，带卷里的主密钥 200。
+          key=$(docker exec lg sh -c "grep -o '\"mainKey\": *\"[^\"]*\"' /data/config.json" | sed 's/.*"\([^"]*\)"$/\1/')
+          echo "key length=${#key}"
+          test "${#key}" -ge 16
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/v1/models)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" http://127.0.0.1:8787/v1/models)" = 200
+          # 管理接口：宿主机访问发布端口时，容器看到的源地址是网桥地址（远端），
+          # 所以默认必须拒绝——这正是「容器里管理接口不可用」的预期。
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" http://127.0.0.1:8787/admin/api/state)" = 403
+          # SIGTERM：进程要自己收尾并以 0 退出，而不是被 15s 后 SIGKILL 掉（137）。
+          docker stop -t 15 lg
+          code=$(docker inspect --format '{{.State.ExitCode}}' lg)
+          echo "exit code=$code"
+          test "$code" = 0
+          docker rm lg
+      - name: Smoke test remote admin and custom key
+        run: |
+          set -euo pipefail
+          docker run -d --name lg2 -p 8788:8787 \
+            -e ZEN_GATE_ALLOW_REMOTE_ADMIN=1 \
+            -e ZEN_GATE_KEY=ci-custom-key-9f3a1c7b \
+            lamp-guide:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8788/health | grep -q '"ok":true' && break
+            sleep 2
+          done
+          echo "--- boot log ---"
+          docker logs lg2
+          # 自定义主密钥：错 key 401，对 key 200，并且已写进 config.json（重启沿用）。
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer nope' http://127.0.0.1:8788/v1/models)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-custom-key-9f3a1c7b' http://127.0.0.1:8788/v1/models)" = 200
+          docker exec lg2 sh -c 'grep -q ci-custom-key-9f3a1c7b /data/config.json'
+          # 远端管理：默认拒绝，打开开关后只认主密钥；跨站 POST 仍要被挡住。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/admin/api/state)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-custom-key-9f3a1c7b' http://127.0.0.1:8788/admin/api/state)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer ci-custom-key-9f3a1c7b' -H 'Origin: http://evil.invalid' http://127.0.0.1:8788/admin/api/reprobe)" = 403
+          docker rm -f lg2
+      - name: Container logs
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker logs lg || true
+          docker logs lg2 || true
+
+  # 注意：GHCR 的包默认是私有的，第一次拉之前去仓库的 Packages 页面点一次 Public，或先 docker login ghcr.io。
+
+  # 发布镜像：默认推到 GitHub 自带的容器仓库 GHCR，用 GITHUB_TOKEN，不需要额外配置。
+  # 想同时推 Docker Hub：在仓库 Settings → Secrets 里加 DOCKERHUB_USERNAME、DOCKERHUB_TOKEN，
+  # 在 Variables 里加 DOCKERHUB_REPO（例如 yourname/lamp-guide），这一段才会真的执行。
+  publish:
+    if: github.event_name == 'push'
+    needs: [docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="${GITHUB_SHA::7}"
+          echo "== 构建 $image:$tag =="
+          docker build -t "$image:latest" -t "$image:$tag" .
+          echo "== 推送到 GHCR =="
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$image:latest"
+          docker push "$image:$tag"
+          if [ -n "${DOCKERHUB_TOKEN:-}" ] && [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_REPO:-}" ]; then
+            echo "== 推送到 Docker Hub: $DOCKERHUB_REPO =="
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            docker tag "$image:$tag" "$DOCKERHUB_REPO:latest"
+            docker tag "$image:$tag" "$DOCKERHUB_REPO:$tag"
+            docker push "$DOCKERHUB_REPO:latest"
+            docker push "$DOCKERHUB_REPO:$tag"
+          else
+            echo "没有 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN / DOCKERHUB_REPO，跳过 Docker Hub 推送"
+          fi

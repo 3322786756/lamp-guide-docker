@@ -1,0 +1,22 @@
+# 镜像里只需要 Go 源码：cmd/lamp-guide-server 只 import internal/zen/**。
+# 根目录的 web/、packaging/、tools/ 属于桌面外壳（Win32 + WebView2），
+# 在这里既不会被编译，也不该占用构建上下文。
+# 注意：internal/zen/gateway/web/ 是网关自己 embed 的首页和图标，必须保留，
+# 所以下面的排除项都写成以 / 开头的根锚定路径，避免误伤嵌套目录。
+
+/.git
+/.github
+/docs
+/packaging
+/tools
+/web
+
+# 桌面构建产物
+*.exe
+/dist
+/build
+
+# 各平台杂项
+**/.DS_Store
+**/node_modules
+*.log

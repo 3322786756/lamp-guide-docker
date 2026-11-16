@@ -1,0 +1,70 @@
+# 只有网关进容器，桌面外壳（Win32 + WebView2）留在 Windows 上。
+#
+# 这个镜像跑的是 cmd/lamp-guide-server：它把 internal/zen/core 抬成一个独立进程，
+# 不碰 internal/shell、internal/native、internal/host 这三层 Windows 专用代码，
+# 所以基础镜像里不需要任何 GUI 依赖，CGO 也可以关掉。
+#
+#   docker build -t lamp-guide:latest .
+#   docker run -d --name lamp-guide -p 8787:8787 -v lamp-guide-data:/data lamp-guide:latest
+#
+# 两个基础镜像的标签都做成可覆盖的构建参数：镜像仓库里的具体版本会随时间变化，
+# 你那边如果默认标签已经不适用，用 --build-arg 指过去就行，不必改文件。
+#   docker build --build-arg GO_IMAGE=golang:1.26 --build-arg RUNTIME_IMAGE=alpine:3.21 .
+
+# ---------- 构建 ----------
+ARG GO_IMAGE=golang:1.26-alpine
+ARG RUNTIME_IMAGE=alpine:3.22
+
+FROM ${GO_IMAGE} AS build
+
+# 拉依赖。国内网络把 GOPROXY 换成 https://goproxy.cn,direct 即可：
+#   docker build --build-arg GOPROXY=https://goproxy.cn,direct -t lamp-guide:latest .
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV CGO_ENABLED=0 \
+    GOOS=linux \
+    GOPROXY=${GOPROXY} \
+    GOTOOLCHAIN=local
+
+WORKDIR /src
+
+# 先只拷依赖清单，让 go mod download 这一层在源码变动时仍然命中缓存。
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# 静态链接 + 去掉符号表：产物直接跑在 alpine 上，不留 libc 依赖。
+RUN go build -trimpath -ldflags="-s -w" -o /out/lamp-guide-server ./cmd/lamp-guide-server
+
+# ---------- 运行 ----------
+FROM ${RUNTIME_IMAGE}
+
+# ca-certificates: 网关要跟各渠道走 HTTPS。
+# tzdata:          日志和用量统计按本地时区落盘。
+RUN apk add --no-cache ca-certificates tzdata \
+    && adduser -D -H -u 10001 -s /sbin/nologin lamp \
+    && mkdir -p /data \
+    && chown 10001:10001 /data
+
+COPY --from=build /out/lamp-guide-server /usr/local/bin/lamp-guide-server
+
+# 非 root 运行：进程只需要 /data 一个可写目录。
+USER lamp
+
+# /data 是网关的全部状态：config.json（渠道登录、供应商、主密钥、用量统计）。
+# 不挂卷等于每次重建都从空白配置开始。
+ENV ZEN_GATE_HOME=/data \
+    TZ=Asia/Shanghai \
+    ZEN_GATE_ALLOW_LAN=1
+
+VOLUME ["/data"]
+EXPOSE 8787
+
+# /health 不需要鉴权，且网关此时已经绑好端口、加载完配置。
+# 探针必须绕开 HTTP_PROXY：宿主机给容器配了上游代理时，busybox 的 wget 会
+# 把回环请求也丢给代理，报出来的「不健康」是假警报。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD http_proxy= https_proxy= no_proxy='*' \
+        wget -q -O /dev/null "http://127.0.0.1:${ZEN_GATE_PORT:-8787}/health" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/lamp-guide-server"]

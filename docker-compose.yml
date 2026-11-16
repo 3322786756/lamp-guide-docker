@@ -1,0 +1,53 @@
+# Lamp Guide 网关的容器编排。
+#
+#   docker compose up -d          # 首次会先构建镜像
+#   docker compose logs -f        # 启动日志里有 API 地址和管理入口
+#   docker compose down           # 停止（数据留在 lamp-guide-data 卷里）
+#
+# 想让配置沿用桌面应用里已经登录好的渠道，把导出的 config.json 放进卷对应的
+# 宿主机目录，或者直接指向一个宿主机目录，见 docs/DOCKER.md。
+
+services:
+  lamp-guide:
+    build:
+      context: .
+      # 国内网络拉依赖慢的话改成 https://goproxy.cn,direct
+      args:
+        GOPROXY: https://proxy.golang.org,direct
+    image: lamp-guide:latest
+    container_name: lamp-guide
+    restart: unless-stopped
+
+    ports:
+      # 宿主机端口:容器端口。只想本机访问就写 "127.0.0.1:8787:8787"。
+      - "${LAMP_GUIDE_PORT:-8787}:8787"
+
+    environment:
+      # 配置、日志、用量统计全在这一个目录里。
+      ZEN_GATE_HOME: /data
+      # 容器必须监听所有网卡，否则发布出来的端口永远连不上。
+      ZEN_GATE_ALLOW_LAN: "1"
+      # 容器内没有回环链路可用，管理接口默认只能靠主密钥放行。
+      # 打开后 /admin/api 接受「主密钥」作为凭证；关闭时只有 loopback 能用（容器里等于不可用）。
+      ZEN_GATE_ALLOW_REMOTE_ADMIN: "${ZEN_GATE_ALLOW_REMOTE_ADMIN:-0}"
+      # 首次启动想看完整主密钥就临时改成 1，看完改回 0（日志会留在宿主机上）。
+      ZEN_GATE_SHOW_KEY: "${ZEN_GATE_SHOW_KEY:-0}"
+      # 自定义主密钥：设了就写进 config.json 并一直沿用；留空则自动生成。
+      # 建议放在 .env 或 env_file 里，别写进这个文件提交上库。
+      ZEN_GATE_KEY: "${ZEN_GATE_KEY:-}"
+      TZ: "${TZ:-Asia/Shanghai}"
+
+    volumes:
+      # 具名卷：最简单，状态跟着 Docker 走。
+      - lamp-guide-data:/data
+      # 想直接管一个宿主机目录（比如放导出的 config.json）就注释上面一行，用这行：
+      # - ./data:/data
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  lamp-guide-data:
