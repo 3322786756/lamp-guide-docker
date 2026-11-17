@@ -138,9 +138,12 @@ func TestBrowserUIRemoteNeedsLogin(t *testing.T) {
 		t.Fatalf("错密钥 status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	// 3) 没有会话时，界面资源与 RPC 都不给。
-	if w := do(s, remoteUIRequest("GET", "http://192.168.1.9:8787/admin/ui/", "")); w.Code != 401 {
-		t.Fatalf("未登录取资源 status=%d", w.Code)
+	// 3) 没有会话时：页面送去登录页，静态资源照给（登录页要用），RPC 一律拒绝。
+	if w := do(s, remoteUIRequest("GET", "http://192.168.1.9:8787/admin/ui/", "")); w.Code != http.StatusSeeOther {
+		t.Fatalf("未登录打开界面应当跳到登录页，status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := do(s, remoteUIRequest("GET", "http://192.168.1.9:8787/admin/ui/js/webbridge.js", "")); w.Code != 200 {
+		t.Fatalf("静态资源不该要会话（登录页也用它），status=%d", w.Code)
 	}
 	if w := do(s, remoteUIRequest("POST", "http://192.168.1.9:8787/admin/rpc", `{"id":1,"method":"Gateway","payload":{"path":"state"}}`)); w.Code != 401 {
 		t.Fatalf("未登录调 RPC status=%d", w.Code)

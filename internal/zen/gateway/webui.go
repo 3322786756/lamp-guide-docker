@@ -231,14 +231,20 @@ func (s *Server) serveRemoteAdminOff(w http.ResponseWriter, r *http.Request) {
 // serveAssets serves web/ under /admin/ui/, with no directory listings: the
 // page asks for exact files.
 func (s *Server) serveAssets(w http.ResponseWriter, r *http.Request) {
-	if !s.webFence(w, r) {
-		return
-	}
-	// 界面里的资源全是相对路径，缺了结尾的斜杠会解析到 /admin/ 下去。
+	// 界面里的资源全是相对路径，缺了结尾的斜杠会解析到 /admin/ 下去。补斜杠要
+	// 放在鉴权之前，否则重定向本身先被拒成一句 JSON 401。
 	if strings.HasSuffix(r.URL.Path, browserUIDir) {
 		http.Redirect(w, r, browserUIDir+"/", http.StatusMovedPermanently)
 		return
 	}
+	if !remoteIsLoopback(r) && !s.adminKeyRemote {
+		s.serveRemoteAdminOff(w, r)
+		return
+	}
+	// 界面代码本身不是秘密（就在公开仓库里），所以 js/css/图片这些静态资源不再
+	// 要求会话——登录页要用同一份资源，而它必然发生在登录之前。
+	// 页面本身（index.html 这类）仍然要会话，没有就送去登录页：浏览器不该停在
+	// 一句 {"error":"需要先登录：打开 /admin 输入主密钥"} 上。
 	name := strings.TrimPrefix(r.URL.Path, browserUIDir)
 	name = strings.TrimPrefix(name, "/")
 	if name == "" {
@@ -246,6 +252,10 @@ func (s *Server) serveAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	if !fs.ValidPath(name) {
 		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	if path.Ext(name) == ".html" && !s.webAuthed(r) {
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
 	data, err := fs.ReadFile(web.FS(), name)
@@ -291,13 +301,16 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]any{"error": "主密钥不对"})
 		return
 	}
+	// SameSite 用 Lax 而不是 Strict：从 Unraid 面板、书签栏、聊天窗口这类「别
+	// 的站点」点过来的顶层导航，Strict 的 cookie 根本不会带上，于是每点一次
+	// WebUI 按钮都像掉线一样回到登录页。Lax 仍然不会跟着跨站子请求/表单发出去。
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    s.sessionToken(),
 		Path:     "/",
 		MaxAge:   int(sessionTTL / time.Second),
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -310,7 +323,7 @@ func (s *Server) serveLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
