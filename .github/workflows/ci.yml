@@ -95,8 +95,8 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/v1/models)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" http://127.0.0.1:8787/v1/models)" = 200
           # 管理接口：宿主机访问发布端口时，容器看到的源地址是网桥地址（远端）。
-          # 无界面入口默认允许远端管理，凭卷里的主密钥就能读；没带 key 仍然 401。
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/admin/api/state)" = 401
+          # 无界面入口默认允许远端管理，凭卷里的主密钥就能读；没有 key 仍然 403。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/admin/api/state)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" http://127.0.0.1:8787/admin/api/state)" = 200
           # 远端打开 /admin：直接就是登录页，输主密钥即可进界面。
           test "$(curl -s -o /tmp/admin-login.html -w '%{http_code}' http://127.0.0.1:8787/admin)" = 200
