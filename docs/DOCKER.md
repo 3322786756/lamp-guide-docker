@@ -53,7 +53,7 @@ http://<宿主机>:8787/admin
 ```
 
 - **在宿主机本机打开**（或用 `docker exec` / 反代到回环）：不用登录，`/admin` 直接跳到 `/admin/ui/`。
-- **从别的设备打开**：先去「管理接口」那一节把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成 `1`，然后页面会先要求输入**主密钥**（就是 `/v1` 用的那个 `mainKey`）。登录后拿一个 12 小时有效的会话 cookie，`HttpOnly` + `SameSite=Strict`；换主密钥（`key/rotate` 或改 `ZEN_GATE_KEY`）会让已有会话立刻失效。
+- **从别的设备打开**：先去「管理接口」那一节把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成 `1`，然后页面会先要求输入**主密钥**（就是 `/v1` 用的那个 `mainKey`）。登录后拿一个 12 小时有效的会话 cookie，`HttpOnly` + `SameSite=Lax`（从 Unraid 面板、书签这类跨站点过来也不会掉登录）；换主密钥（`key/rotate` 或改 `ZEN_GATE_KEY`）会让已有会话立刻失效。没登录就打开 `/admin/ui/` 会自动跳到登录页，不会停在一条 JSON 错误上。
 
 界面能做的事和桌面版一致：渠道登录/贴 Key、模型与聚合顺序、供应商、联网、签到、日志、用量、设置、导出/导入配置。少数只有桌面才做得成的动作会被换成等价路径：
 

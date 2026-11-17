@@ -14,8 +14,9 @@
 - CI 增加 Linux 构建与容器冒烟作业（`go vet` 网关包、构建镜像、起容器验 `/health` 与卷内 `config.json`）。
 - 新增 Unraid Docker 模板 `unraid/lamp-guide.xml`（bridge 网络、`/data` 指到 appdata、主密钥等字段表单化），并加 `unraid` 包测试锁住模板与镜像定义一致（端口 8787、卷 `/data`、环境变量名、图标与模板地址）。
 - 新增容器入口脚本 `docker-entrypoint.sh`：以 root 起步只为把数据目录改成运行用户可写（修掉宿主机或 NAS 面板建的 root/nobody 目录导致的 `open store: open /data/config.json.tmp: permission denied`），随后 `su-exec` 降权，服务进程仍非 root；运行用户可用 `ZEN_GATE_UID`/`ZEN_GATE_GID` 或 NAS 惯例的 `PUID`/`PGID` 指定，拒绝以 root 起步时可用 `--user` 走非 root 分支。
-- 新增浏览器版管理界面：容器里没有 WebView2，但界面本身是普通网页，`/admin` 现在直接提供同一套 UI（渠道、模型、聚合、签到、日志、设置）。`web/js/webbridge.js` 把桌面版的消息桥换成 `POST /admin/rpc`，`internal/zen/gateway/webui.go` 在服务端把每次调用按回环形状转给 `/admin/api/*`；权限沿用原规则——回环放行，远端开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 后用主密钥换 12 小时会话（`HttpOnly` + `SameSite=Strict`，换主密钥即刻失效）。导出改成一次性下载令牌，导入改成上传到 `<数据目录>/uploads/` 再读。桌面版走 WebView2 桥，行为不变。
+- 新增浏览器版管理界面：容器里没有 WebView2，但界面本身是普通网页，`/admin` 现在直接提供同一套 UI（渠道、模型、聚合、签到、日志、设置）。`web/js/webbridge.js` 把桌面版的消息桥换成 `POST /admin/rpc`，`internal/zen/gateway/webui.go` 在服务端把每次调用按回环形状转给 `/admin/api/*`；权限沿用原规则——回环放行，远端开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 后用主密钥换 12 小时会话（`HttpOnly` + `SameSite=Lax`，换主密钥即刻失效）。导出改成一次性下载令牌，导入改成上传到 `<数据目录>/uploads/` 再读。桌面版走 WebView2 桥，行为不变。
 - 远端打开 `/admin` 而 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 仍是 `0` 时，不再回一句 `admin is loopback-only` 的 JSON，而是给一页说明（状态码仍是 403），写清楚要加的环境变量、Unraid 模板里在哪一项；Unraid 模板的「允许远端管理」默认值改成 `1`，NAS 上点 WebUI 就能直接看到登录页。
+- 浏览器界面细节修正：没登录直接打开 `/admin/ui/`（或无斜杠的 `/admin/ui`）时，改为跳转到登录页（原来是一句 JSON 401）；js/css/图标等静态资源不再要求会话，登录页上的图标不再坏图；会话 cookie 从 `SameSite=Strict` 改成 `Lax`，从 Unraid 面板、书签这类跨站顶层导航过来不会每次都掉登录。
 
 ## Lamp Guide 1.2.1 — 2026-11-06
 
