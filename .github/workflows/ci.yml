@@ -191,6 +191,11 @@ jobs:
           # 远端：登录页而不是 403，说明远端管理开关生效；没会话时 RPC 一律 401。
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin)" = 200
           curl -s http://127.0.0.1:8791/admin | grep -q '主密钥'
+          # 没登录就打开界面页面：跳回登录页，而不是丢一句 JSON 401；
+          # 静态资源（登录页上的图标、界面脚本）不要求会话。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin/ui/)" = 303
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin/ui)" = 301
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin/ui/assets/lamp-guide.svg)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
             -H 'Content-Type: application/json' \
             --data '{"id":1,"method":"Gateway","payload":{"path":"state"}}' \
@@ -205,6 +210,13 @@ jobs:
             --data '{"key":"ci-ui-key-0123456789abcdef"}' \
             http://127.0.0.1:8791/admin/login)" = 200
           grep -q lamp_admin "$jar"
+          # 会话 cookie 用 Lax：从 Unraid 面板、书签这类跨站顶层导航过来不会掉登录。
+          hdr=$(mktemp)
+          curl -s -o /dev/null -D "$hdr" -X POST \
+            -H 'Content-Type: application/json' \
+            --data '{"key":"ci-ui-key-0123456789abcdef"}' \
+            http://127.0.0.1:8791/admin/login
+          grep -qi 'SameSite=Lax' "$hdr"
           # 带会话：/admin 跳界面目录，静态资源与 RPC 都通，state 里真的有数据。
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" http://127.0.0.1:8791/admin)" = 303
           test "$(curl -s -b "$jar" http://127.0.0.1:8791/admin/ui/js/webbridge.js | wc -c)" -gt 1000
