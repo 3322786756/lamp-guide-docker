@@ -6,7 +6,7 @@
 
 - 新增无界面入口 `cmd/lamp-guide-server`：只启动网关，不带窗口、托盘与 WebView2，可在任意 Linux 宿主（含容器）运行。桌面版本不受影响。
 - 新增多阶段 `Dockerfile`（静态链接、非 root、`/data` 数据卷、内置 `HEALTHCHECK` 打 `/health`）与 `docker-compose.yml`。
-- 新增 `internal/zen/core` 的两个可选参数：`AllowLan` 让容器监听所有网卡（仅本次运行生效，不写回配置），`AllowRemoteAdmin` 允许远端的 `/admin/api` 以主密钥作为凭证；回环调用方的原有校验逻辑一字未改，远端仍默认拒绝。打开后远端浏览器可以打开 `/admin` 那张静态说明页（浏览器发不出凭据头），数据接口仍只认主密钥。
+- 新增 `internal/zen/core` 的两个可选参数：`AllowLan` 让容器监听所有网卡（仅本次运行生效，不写回配置），`AllowRemoteAdmin` 允许远端的 `/admin/api` 以主密钥作为凭证；回环调用方的原有校验逻辑一字未改；这个选项在库里默认关闭，桌面版从不打开（无界面入口默认打开，见最后一条）。打开后远端浏览器可以打开 `/admin` 那张静态说明页（浏览器发不出凭据头），数据接口仍只认主密钥。
 - 新增 `docs/DOCKER.md`：从桌面应用导出配置进容器、主密钥获取、环境变量、管理接口开放方式、反向代理与安全提示、常见问题。
 - 镜像支持多架构：一次构建出 `linux/amd64`、`linux/arm64`、`linux/arm/v7`（树莓派 32 位），CI 用 buildx 推多架构清单；构建阶段靠 Go 交叉编译，不需要 QEMU 模拟 arm 跑编译器。
 - CI 增加镜像发布作业：push 到 `main` 后自动构建并推送 GHCR（`ghcr.io/<owner>/<repo>`）；仓库里配好 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` / `DOCKERHUB_REPO` 时同一次运行顺带推 Docker Hub。
@@ -17,6 +17,7 @@
 - 新增浏览器版管理界面：容器里没有 WebView2，但界面本身是普通网页，`/admin` 现在直接提供同一套 UI（渠道、模型、聚合、签到、日志、设置）。`web/js/webbridge.js` 把桌面版的消息桥换成 `POST /admin/rpc`，`internal/zen/gateway/webui.go` 在服务端把每次调用按回环形状转给 `/admin/api/*`；权限沿用原规则——回环放行，远端开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 后用主密钥换 12 小时会话（`HttpOnly` + `SameSite=Lax`，换主密钥即刻失效）。导出改成一次性下载令牌，导入改成上传到 `<数据目录>/uploads/` 再读。桌面版走 WebView2 桥，行为不变。
 - 远端打开 `/admin` 而 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 仍是 `0` 时，不再回一句 `admin is loopback-only` 的 JSON，而是给一页说明（状态码仍是 403），写清楚要加的环境变量、Unraid 模板里在哪一项；Unraid 模板的「允许远端管理」默认值改成 `1`，NAS 上点 WebUI 就能直接看到登录页。
 - 浏览器界面细节修正：没登录直接打开 `/admin/ui/`（或无斜杠的 `/admin/ui`）时，改为跳转到登录页（原来是一句 JSON 401）；js/css/图标等静态资源不再要求会话，登录页上的图标不再坏图；会话 cookie 从 `SameSite=Strict` 改成 `Lax`，从 Unraid 面板、书签这类跨站顶层导航过来不会每次都掉登录。
+- 无界面入口（容器 / 直接跑 `lamp-guide-server`）不再默认「只给容器本机」：`ZEN_GATE_ALLOW_REMOTE_ADMIN` 默认改成开启，装好就能从局域网浏览器打开 `/admin` 输主密钥登录、用 `Authorization: Bearer <主密钥>` 调 `/admin/api/*`；回环调用方照旧免密钥。想锁回本机才设成 `0`（Dockerfile、compose、Unraid 模板与文档同步）。
 - 排查更省事：`ZEN_GATE_ALLOW_REMOTE_ADMIN` 的值现在容忍引号和空格，`1/true/yes/on` 之外还会认 `enable(d)`、`0/false/no/off/disable(d)`；启动日志与 403 说明页都会写出这个进程实际读到的值，并说明「变量没进容器 / 值认不出 / 容器没重建」是哪种情况。
 
 ## Lamp Guide 1.2.1 — 2026-11-06

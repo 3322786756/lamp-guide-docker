@@ -53,7 +53,7 @@ http://<宿主机>:8787/admin
 ```
 
 - **在宿主机本机打开**（或用 `docker exec` / 反代到回环）：不用登录，`/admin` 直接跳到 `/admin/ui/`。
-- **从别的设备打开**：先去「管理接口」那一节把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成 `1`，然后页面会先要求输入**主密钥**（就是 `/v1` 用的那个 `mainKey`）。登录后拿一个 12 小时有效的会话 cookie，`HttpOnly` + `SameSite=Lax`（从 Unraid 面板、书签这类跨站点过来也不会掉登录）；换主密钥（`key/rotate` 或改 `ZEN_GATE_KEY`）会让已有会话立刻失效。没登录就打开 `/admin/ui/` 会自动跳到登录页，不会停在一条 JSON 错误上。
+- **从别的设备打开**：直接打开就行——无界面入口默认就接受远端管理，页面会先要求输入**主密钥**（就是 `/v1` 用的那个 `mainKey`）。登录后拿一个 12 小时有效的会话 cookie，`HttpOnly` + `SameSite=Lax`（从 Unraid 面板、书签这类跨站点过来也不会掉登录）；换主密钥（`key/rotate` 或改 `ZEN_GATE_KEY`）会让已有会话立刻失效。没登录就打开 `/admin/ui/` 会自动跳到登录页，不会停在一条 JSON 错误上。
 
 界面能做的事和桌面版一致：渠道登录/贴 Key、模型与聚合顺序、供应商、联网、签到、日志、用量、设置、导出/导入配置。少数只有桌面才做得成的动作会被换成等价路径：
 
@@ -67,7 +67,7 @@ http://<宿主机>:8787/admin
 几个细节：
 
 - 界面和 `/admin/api/*` 共用同一套权限：回环放行，远端要主密钥。界面内部走 `POST /admin/rpc`，语义等价于桌面版的消息桥，不会因为「在浏览器里」而多开一个口子。
-- `ZEN_GATE_ALLOW_REMOTE_ADMIN=0` 时，远端打开 `/admin` 会拿到 403 和一页说明（告诉你要把哪个环境变量设成 `1`），这是故意的：管理面默认只给本机。Unraid 模板里这一项默认就是 `1`，compose 默认是 `0`。
+- `ZEN_GATE_ALLOW_REMOTE_ADMIN=0` 时，远端打开 `/admin` 会拿到 403 和一页说明（告诉你要删掉哪个变量），这是「你自己关的」：无界面入口默认允许远端管理，只有显式设成 `0`（或写了个认不出来的值）才回到只给本机。
 - 反代（Nginx / Caddy）到公网时请把 HTTPS 一起配上，会话 cookie 不会自己变 Secure——明文 HTTP 暴露等于把主密钥明文送出去。
 - 界面本身是静态资源，`curl` 也能验证：`curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/admin/ui/`（回环下应得 `200`）。
 
@@ -106,7 +106,7 @@ docker run -d --name lamp-guide \
 [2026-11-16 00:17:25.851] [INFO] {app} dashboard ready at http://127.0.0.1:8787
 lamp-guide-server 1.2.1 · go go1.26.11 · data /data
 API      http://172.17.0.5:8787/v1  (OpenAI/Anthropic 兼容；其它设备填这个地址)
-admin    http://127.0.0.1:8787/admin  (仅回环；ZEN_GATE_ALLOW_REMOTE_ADMIN=1 才接受主密钥的远端调用)
+admin    http://<本机地址>:8787/admin  (远端可用，先输主密钥；本机访问免密钥)
 key      ofm-AbCd…  (ZEN_GATE_SHOW_KEY=1 可打印完整主密钥)
 注意: 数据目录里没有任何渠道或供应商。...
 ```
@@ -152,9 +152,9 @@ wget -O /boot/config/plugins/dockerMan/templates-user/lamp-guide.xml \
 | 数据目录 | `/mnt/user/appdata/lamp-guide` | 网关全部状态，务必在 appdata 里并被备份覆盖 |
 | PUID / PGID | `99` / `100` | 数据文件的属主（Unraid 惯例 nobody:users）；容器启动时先按它改属主再降权运行 |
 | 主密钥 | 空 | 留空则首次启动生成随机密钥，可从容器日志拿 |
-| 允许远端管理 | `0` | 想从别的电脑用浏览器调 `/admin/api/*` 才改成 1（仍需主密钥） |
+| 允许远端管理 | `1` | 默认开着：从别的电脑用浏览器打开界面、调 `/admin/api/*` 都行（凭主密钥）；填 `0` 才只允许本机 |
 
-只想看网关活着没有、又不想开远端管理，可以让容器自己问自己（回环地址无需密钥）：
+只想看网关活着没有、又不想从别的机器碰管理面，可以让容器自己问自己（回环地址无需密钥）：
 
 ```bash
 docker exec -it lamp-guide wget -qO- http://127.0.0.1:8787/admin/api/state
@@ -255,7 +255,7 @@ docker compose cp config.json lamp-guide:/data/config.json
 docker compose restart lamp-guide
 ```
 
-也可以反过来推：让容器先跑起来，再用 `POST /admin/api/import` 把配置推进去（需要 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 加主密钥，见下节）。导入接口会校验并保留本机的绑定端口，掩码占位符会落成「未配置」而不是假凭据。
+也可以反过来推：让容器先跑起来，再用 `POST /admin/api/import` 把配置推进去（带主密钥即可，见下节）。导入接口会校验并保留本机的绑定端口，掩码占位符会落成「未配置」而不是假凭据。
 
 > 渠道登录态（尤其免费通道的 OAuth）会过期，过期后容器里没法点按钮重新登录：重新在桌面应用里登录一次，再导出一遍配置覆盖进卷里即可。
 
@@ -266,26 +266,23 @@ docker compose restart lamp-guide
 | `ZEN_GATE_HOME` | `/data`（镜像内置） | 数据目录，配置/日志/用量都在这里 |
 | `ZEN_GATE_PORT` | 配置里的端口，首次是 `8787` | 容器内监听端口；改这里记得同步改 `-p` |
 | `ZEN_GATE_ALLOW_LAN` | `1` | 监听 `0.0.0.0`。设 `0` 只监听回环——容器里那样就没人连得上了 |
-| `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `0` | 允许非回环地址打开管理界面、访问 `/admin/api`（凭主密钥），见下节。Unraid 模板默认 `1` |
+| `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `1` | 允许非回环地址打开管理界面、访问 `/admin/api`（凭主密钥），见下节。设 `0` 才只允许本机 |
 | `ZEN_GATE_SHOW_KEY` | `0` | 启动时把完整主密钥打进日志 |
 | `ZEN_GATE_KEY` | 空 | 自定义主密钥；设了就写进 `config.json`，之后启动一直沿用它 |
 | `TZ` | `Asia/Shanghai` | 时区，影响日志与用量统计的时间戳 |
 | `PUID` / `PGID` | `10001` / `10001` | 容器内运行用户（NAS 惯例写法）；也可以写 `ZEN_GATE_UID` / `ZEN_GATE_GID` |
 
-布尔量接受 `1/true/yes/on` 与 `0/false/no/off`；写别的值会在日志里提示并回落到默认值。
+布尔量接受 `1/true/yes/on` 与 `0/false/no/off`（顺手容忍多写的引号与空格）；写别的值会在日志里提示并回落到默认值。
 
 ## 管理接口
 
-`/admin/api/*` 原本是「只认回环」的：桌面应用从本机页面调它，这条约束同时挡住 DNS rebinding 和跨站请求。容器里每个请求都来自网桥地址（例如 `172.17.0.1`），回环判定永远不成立——所以默认情况下管理接口在容器里**不可用**，网关照常转发，只是改不了配置。
+`/admin/api/*` 原本是「只认回环」的：桌面应用从本机页面调它，这条约束同时挡住 DNS rebinding 和跨站请求。容器里每个请求都来自网桥地址（例如 `172.17.0.1`），回环判定永远不成立——所以无界面入口把这条规则换成了**凭主密钥**，而且默认就开着：容器起来就能从别的机器调管理接口。
 
-要用就走显式开关：
+规则很简单：
 
-```yaml
-environment:
-  ZEN_GATE_ALLOW_REMOTE_ADMIN: "1"
-```
-
-打开后，远端调用方必须出示**主密钥**（`Authorization: Bearer <MainKey>` 或 `x-api-key`），并且 POST 的 `Origin`/`Referer`（如果带了）必须与请求地址同源——和原来的跨站规则一模一样，只是把「你在本机」换成了「你拿着主密钥」。回环调用方走的还是老逻辑，一点没变；没打开这个开关时，远端依旧一律 403。桌面版不会打开它。
+- 回环调用方（`docker exec`、宿主机反代到 `127.0.0.1`）照旧免密钥；
+- 非回环调用方必须出示**主密钥**（`Authorization: Bearer <MainKey>` 或 `x-api-key`），并且 POST 的 `Origin`/`Referer`（如果带了）必须与请求地址同源——跨站规则一点没变，只是把「你在本机」换成了「你拿着主密钥」；
+- 想彻底关掉远端这条路（只留本机），设 `ZEN_GATE_ALLOW_REMOTE_ADMIN=0` 再重建容器。桌面版从不打开它。
 
 ```bash
 KEY=$(docker compose exec -T lamp-guide grep -o '"mainKey": *"[^"]*"' /data/config.json | cut -d'"' -f4)
@@ -296,9 +293,9 @@ curl -H "Authorization: Bearer $KEY" -X POST --data-binary @backup.json \
      http://<host>:8787/admin/api/import
 ```
 
-`/admin`（HTML）就是上面那套浏览器版管理界面。回环打开直接进；打开 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 之后远端浏览器能看到登录页，用主密钥换会话。界面内部的每一次调用走 `/admin/rpc`，服务端在进程内按回环形状发给 `/admin/api/*`——所以「界面能用」不代表「管理面没关门」，权限还是那一套：回环放行，远端认主密钥。
+`/admin`（HTML）就是上面那套浏览器版管理界面。回环打开直接进；远端浏览器打开就是登录页，用主密钥换会话。界面内部的每一次调用走 `/admin/rpc`，服务端在进程内按回环形状发给 `/admin/api/*`——所以「界面能用」不代表「管理面没关门」，权限还是那一套：回环放行，远端认主密钥。
 
-> 安全提醒：`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 等于把管理面暴露给「知道主密钥的一切人」。别直接把 8787 挂到公网，套一层 HTTPS 反代（Nginx / Caddy / Traefik），并且定期 `key/rotate`。
+> 安全提醒：默认开着远端管理，等于把管理面暴露给「知道主密钥的一切人」，主密钥同时也是 `/v1` 的钥匙。别直接把 8787 挂到公网，要对公网就套一层 HTTPS 反代（Nginx / Caddy / Traefik），并且定期 `key/rotate`；只在家里/内网用就把端口留给内网。
 
 ## 给别的设备用
 
@@ -333,15 +330,15 @@ docker run --rm -v lamp-guide-data:/data -v "$PWD:/backup" alpine \
 
 **日志里有 `127.0.0.1:8095` 的绑定失败**：那是 Qoder 内置 hub 的可选端口，容器内就算占用了也不影响转发，可忽略。
 
-**打开 `/admin` 是 403 / 一直停在登录页**：403 说明 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 还是 `0`（远端只认回环）——页面里会直接写清楚要加的变量，改完重启容器即可（Unraid 模板默认已经是 `1`，新建的容器不受影响；老容器要在模板里点应用重建一次）。停在登录页则是主密钥输错了，或者换了主密钥导致会话失效（刷新重登即可）。本机用 `docker exec lamp-guide wget -qO- http://127.0.0.1:8787/admin/ui/ | head -5` 能确认界面本身在不在。
+**打开 `/admin` 是 403 / 一直停在登录页**：无界面入口默认就允许远端管理，所以 403 只可能是有人把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成了 `0`（或写了个认不出来的值）——403 页面本身会印出「这个进程读到的值」和怎么做：删掉这个变量（默认就是开的）或改成 `1`，然后**重建**容器（`docker restart` 不会带上新的 `-e`）。停在登录页则是主密钥输错了，或者换了主密钥导致会话失效（刷新重登即可）。本机用 `docker exec lamp-guide wget -qO- http://127.0.0.1:8787/admin/ui/ | head -5` 能确认界面本身在不在。
 
-**我明明加了 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1`，还是 403**：按顺序查这三件事，403 页面本身会把「这个进程读到的值」印出来，先看那个：
+**我把远端管理关掉了，怎么开回来**：按顺序查这三件事，403 页面本身会把「这个进程读到的值」印出来，先看那个：
 
-1. 变量到底进没进容器：`docker exec lamp-guide env | grep ZEN_GATE`。没有就是没生效——`docker restart` **不会**带上新的 `-e`，必须重建容器（Unraid 点「应用」/「强制更新」，compose 用 `up -d`，`docker run` 重新跑一次）。
+1. 变量到底进没进容器：`docker exec lamp-guide env | grep ZEN_GATE`。删掉它（默认开启）或设成 `1`，然后重建容器（Unraid 点「应用」/「强制更新」，compose 用 `up -d`，`docker run` 重新跑一次）。
 2. 值有没有被引号包住：`ZEN_GATE_ALLOW_REMOTE_ADMIN="1"` 这种写法以前会被当成认不出来（现在会自动去掉引号）。值只认 `1` / `true` / `yes` / `on`，`0` / `false` / `off` 都算关闭。
 3. 是不是加在了别的地方：模板/`docker run` 里都要落在**同一个容器**上；`docker inspect lamp-guide --format '{{json .Config.Env}}'` 能看到这个容器最终的完整环境变量。
 
-启动日志里也有一行写清了状态：`admin … (远端可用，先输主密钥)` 或 `admin … (仅本机：容器里没有 ZEN_GATE_ALLOW_REMOTE_ADMIN…)`。
+启动日志里也有一行写清了状态：`admin … (远端可用，先输主密钥；本机访问免密钥)`，或者被关掉时的 `admin … (仅本机：ZEN_GATE_ALLOW_REMOTE_ADMIN=0…)`。
 
 **界面里点「导出」没反应**：浏览器拦了下载？换个浏览器或允许该站点下载；导出的文件是网关生成的一次性令牌（10 分钟内有效、只能下一次）。
 

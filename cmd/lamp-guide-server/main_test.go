@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"zenui/internal/zen/core"
 	"zenui/internal/zen/store"
 )
 
@@ -160,5 +161,33 @@ func TestKeyPrefix(t *testing.T) {
 		if got := keyPrefix(tc.in); got != tc.want {
 			t.Fatalf("keyPrefix(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// 无界面入口是唯一一个「回环根本没人来」的部署形态：容器里每个请求都来自网桥
+// 地址，所以远端管理必须默认开着，否则管理面永远打不开。核心库的零值仍是关闭，
+// 这里钉住的是「这个入口怎么解释环境变量」。
+func TestOptionsRemoteAdminDefaultsOn(t *testing.T) {
+	for _, name := range []string{"ZEN_GATE_ALLOW_REMOTE_ADMIN", "ZEN_GATE_ALLOW_LAN"} {
+		t.Setenv(name, "")
+	}
+	if opts := options(); !opts.AllowRemoteAdmin {
+		t.Fatal("没设 ZEN_GATE_ALLOW_REMOTE_ADMIN 时，无界面入口应当默认允许远端管理")
+	}
+
+	t.Setenv("ZEN_GATE_ALLOW_REMOTE_ADMIN", "0")
+	if opts := options(); opts.AllowRemoteAdmin {
+		t.Fatal("ZEN_GATE_ALLOW_REMOTE_ADMIN=0 时应当锁回本机")
+	}
+
+	// 显式关闭的写法不止一种，别让 --env-file 里的 false 变成「开着」。
+	t.Setenv("ZEN_GATE_ALLOW_REMOTE_ADMIN", "false")
+	if opts := options(); opts.AllowRemoteAdmin {
+		t.Fatal("ZEN_GATE_ALLOW_REMOTE_ADMIN=false 时应当锁回本机")
+	}
+
+	// 桌面版走不到这里，但库的零值必须是「关」：别把容器策略泄漏给嵌入方。
+	if (core.Options{}).AllowRemoteAdmin {
+		t.Fatal("core.Options 的零值应当仍是关闭")
 	}
 }

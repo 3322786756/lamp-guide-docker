@@ -28,7 +28,7 @@ docker logs lamp-guide          # 启动日志里有 API 地址和主密钥提�
 curl http://127.0.0.1:8787/health
 ```
 
-起来之后，浏览器打开 `http://<主机>:8787/admin` 就是管理界面（在本机/回环打开不用登录；从别的设备打开要先把 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 设成 `1`，再用主密钥登录）。
+起来之后，浏览器打开 `http://<主机>:8787/admin` 就是管理界面：无界面入口默认允许远端访问，从别的设备打开会先要求输入主密钥（`/v1` 用的那个 `mainKey`）；在本机/回环打开则免登录。想彻底关掉远端管理，设 `ZEN_GATE_ALLOW_REMOTE_ADMIN=0`。
 
 也可以用仓库里的 `docker-compose.yml`：`docker compose up -d`。
 
@@ -56,7 +56,7 @@ Unraid 用户有现成模板：[`unraid/lamp-guide.xml`](unraid/lamp-guide.xml)�
 | `Dockerfile` / `docker-compose.yml` / `.dockerignore` | 多阶段构建、静态二进制、HEALTHCHECK、多架构 |
 | `docker-entrypoint.sh` | 容器入口：把数据目录改成运行用户可写，再降权启动网关 |
 | `internal/zen/gateway/webui.go` | 浏览器版管理界面：把桌面的消息桥换成 `/admin/rpc`，界面同一份文件，远端用主密钥换会话 |
-| 远端管理开关 | 管理接口仍默认只认回环；`ZEN_GATE_ALLOW_REMOTE_ADMIN=1` 时远端请求改用主密钥校验 |
+| 远端管理开关 | 容器里默认开启：远端请求凭主密钥放行、回环免密钥；设 `ZEN_GATE_ALLOW_REMOTE_ADMIN=0` 才只留本机 |
 | `ZEN_GATE_KEY` | 启动时用自己的主密钥覆盖 `config.json` 里的随机密钥，省去从日志里翻 |
 | CI | 在 GitHub Actions 里真机构建镜像、起容器冒烟，再推 GHCR 多架构清单 |
 
@@ -68,7 +68,7 @@ Unraid 用户有现成模板：[`unraid/lamp-guide.xml`](unraid/lamp-guide.xml)�
 | `ZEN_GATE_HOME` | `/data` | 数据目录，必须指向挂卷的位置 |
 | `ZEN_GATE_PORT` | `8787` | 监听端口 |
 | `ZEN_GATE_ALLOW_LAN` | `1` | 监听 `0.0.0.0`，允许局域网访问 |
-| `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `0` | 允许远端用主密钥调 `/admin/api/*` |
+| `ZEN_GATE_ALLOW_REMOTE_ADMIN` | `1` | 允许远端打开管理界面、用主密钥调 `/admin/api/*`；设 `0` 只留本机 |
 | `PUID` / `PGID` | `10001` | 运行用户（NAS 惯例写法）；入口脚本先按它改数据目录属主再降权运行 |
 | `ZEN_GATE_SHOW_KEY` | `0` | 启动日志里打印完整主密钥 |
 | `TZ` | `Asia/Shanghai` | 容器时区 |

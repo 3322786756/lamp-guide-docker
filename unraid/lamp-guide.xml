@@ -9,7 +9,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/3322786756/lamp-guide-docker/issues</Support>
   <Project>https://github.com/3322786756/lamp-guide-docker</Project>
-  <Overview>Lamp Guide 网关（无界面版）：把模型渠道、供应商和 Agent 收进一个 OpenAI / Anthropic 兼容的本地入口，供其它程序调用。&#13;&#10;容器里只跑网关，没有桌面窗口；镜像同时提供 linux/amd64、linux/arm64、linux/arm/v7。&#13;&#10;&#13;&#10;装好后：&#13;&#10;1. 填「主密钥」（也可以用默认的随机密钥，从容器日志里看）；&#13;&#10;2. 客户端 Base URL 填 http://你的NAS地址:8787/v1，Key 填主密钥；&#13;&#10;3. 管理接口是 /admin/api/*，默认只认容器内回环地址，要用浏览器从局域网访问请把「允许远端管理」改成 1（仍需要主密钥）。&#13;&#10;&#13;&#10;渠道登录、用量和配置都在「数据目录」里，务必挂到 appdata 并做好备份。详细说明见项目 docs/DOCKER.md。</Overview>
+  <Overview>Lamp Guide 网关（无界面版）：把模型渠道、供应商和 Agent 收进一个 OpenAI / Anthropic 兼容的本地入口，供其它程序调用。&#13;&#10;容器里只跑网关，没有桌面窗口；镜像同时提供 linux/amd64、linux/arm64、linux/arm/v7。&#13;&#10;&#13;&#10;装好后：&#13;&#10;1. 填「主密钥」（也可以用默认的随机密钥，从容器日志里看）；&#13;&#10;2. 客户端 Base URL 填 http://你的NAS地址:8787/v1，Key 填主密钥；&#13;&#10;3. 浏览器打开 http://你的NAS地址:8787/admin 就是管理界面，输入主密钥即可（容器内回环访问免密钥）；「允许远端管理」默认开着，只想本机用才改成 0。&#13;&#10;&#13;&#10;渠道登录、用量和配置都在「数据目录」里，务必挂到 appdata 并做好备份。详细说明见项目 docs/DOCKER.md。</Overview>
   <Category>Network:Other Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8787]/admin</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/3322786756/lamp-guide-docker/main/unraid/lamp-guide.xml</TemplateURL>
@@ -24,7 +24,7 @@
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="数据文件的属主用户 id，Unraid 惯例是 99（nobody）。容器启动时会先把数据目录改成这个属主再降权运行。" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="数据文件的属主组 id，Unraid 惯例是 100（users）。" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="主密钥" Target="ZEN_GATE_KEY" Default="" Mode="" Description="所有 /v1 请求的凭据，建议填 32 位以上随机串（例如 openssl rand -hex 24）。留空则首次启动自动生成随机密钥，可在容器日志里看到前 8 位，或用「启动日志显示完整密钥」临时打印。" Type="Variable" Display="always" Required="false" Mask="true"></Config>
-  <Config Name="允许远端管理" Target="ZEN_GATE_ALLOW_REMOTE_ADMIN" Default="1" Mode="" Description="1 = 允许从局域网打开管理界面、调 /admin/api/*，凭据是主密钥（登录后 12 小时会话），写操作仍校验来源站点；0 = 只认容器内回环地址，WebUI 按钮从别的电脑点开会看到一页提示。NAS 上通常要远程点开，所以默认 1；只想本机用时改成 0。" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="允许远端管理" Target="ZEN_GATE_ALLOW_REMOTE_ADMIN" Default="1" Mode="" Description="1 = 允许从局域网打开管理界面、调 /admin/api/*，凭据是主密钥（登录后 12 小时会话），写操作仍校验来源站点。无界面入口默认就是 1，不用改；设成 0 才只认容器内回环地址（那样从别的电脑点 WebUI 只会看到一页提示）。" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
   <Config Name="允许局域网访问" Target="ZEN_GATE_ALLOW_LAN" Default="1" Mode="" Description="1 = 监听 0.0.0.0（bridge 端口映射需要）；0 = 只监听容器内 127.0.0.1，外部访问不到。" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
   <Config Name="启动日志显示完整密钥" Target="ZEN_GATE_SHOW_KEY" Default="0" Mode="" Description="1 = 启动时在日志里打印完整主密钥，方便拿到的同时也会留在日志里，看完记得改回 0。" Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
   <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode="" Description="日志时间与用量统计按这个时区落盘。" Type="Variable" Display="advanced" Required="false" Mask="false">Asia/Shanghai</Config>

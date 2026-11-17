@@ -27,9 +27,10 @@ services:
       ZEN_GATE_HOME: /data
       # 容器必须监听所有网卡，否则发布出来的端口永远连不上。
       ZEN_GATE_ALLOW_LAN: "1"
-      # 容器内没有回环链路可用，管理接口默认只能靠主密钥放行。
-      # 打开后 /admin/api 接受「主密钥」作为凭证；关闭时只有 loopback 能用（容器里等于不可用）。
-      ZEN_GATE_ALLOW_REMOTE_ADMIN: "${ZEN_GATE_ALLOW_REMOTE_ADMIN:-0}"
+      # 容器里每个请求都来自网桥地址（远端），所以管理面默认改用「主密钥」放行：
+      # 打开浏览器打开 /admin 就是登录页，/admin/api 认 Authorization: Bearer <主密钥>。
+      # 只在你自己想彻底关掉远端管理时才设成 0（那样容器里就只剩回环可用）。
+      ZEN_GATE_ALLOW_REMOTE_ADMIN: "${ZEN_GATE_ALLOW_REMOTE_ADMIN:-1}"
       # 首次启动想看完整主密钥就临时改成 1，看完改回 0（日志会留在宿主机上）。
       ZEN_GATE_SHOW_KEY: "${ZEN_GATE_SHOW_KEY:-0}"
       # 自定义主密钥：设了就写进 config.json 并一直沿用；留空则自动生成。

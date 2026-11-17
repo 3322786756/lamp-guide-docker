@@ -244,11 +244,11 @@ func remoteAdminOffState() (value, hint string) {
 	raw, set := os.LookupEnv("ZEN_GATE_ALLOW_REMOTE_ADMIN")
 	if !set {
 		return "（没有设置）",
-			"容器里没有这个变量。docker restart 不会应用新的 -e，要重建容器：Unraid 点「应用」或「强制更新」，compose 用 up -d，docker run 就重新 run 一次。"
+			"无界面入口默认就是允许远端管理的，现在这个进程却没开——说明它跑的不是 lamp-guide-server（桌面版或别的嵌入方默认只认本机），或者代码是旧的。用新镜像重建容器。"
 	}
 	if strings.TrimSpace(raw) == "" {
 		return "（空值）",
-			"变量存在但是空的，等同于关闭。改成 1 再重建容器。"
+			"变量存在但是空的，等同于关闭。删掉这个变量（默认就是开的）或设成 1，再重建容器。"
 	}
 	switch strings.ToLower(strings.Trim(strings.TrimSpace(raw), `"'`)) {
 	case "1", "true", "yes", "y", "on", "enable", "enabled":
@@ -256,10 +256,10 @@ func remoteAdminOffState() (value, hint string) {
 			"值看着是对的，说明容器还是加变量之前的那个进程：重建容器后才会生效。"
 	case "0", "false", "no", "n", "off", "disable", "disabled":
 		return raw,
-			"这个变量现在是关的（0/false/off 都算关闭）。改成 1 再重建容器。"
+			"远端管理被这个变量显式关掉了（0/false/off 都算关闭），所以只剩本机可用。删掉它（默认开着）或改成 1，再重建容器。"
 	default:
 		return raw,
-			"这个值认不出来。只认 1 / true / yes / on（大小写随意，别带引号或空格），改掉再重建容器。"
+			"这个值认不出来，按关闭处理。只认 1 / true / yes / on（大小写随意，别带引号或空格）；删掉变量则默认开启。"
 	}
 }
 

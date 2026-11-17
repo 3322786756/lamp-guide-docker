@@ -14,7 +14,7 @@
 //	                          keeps it on loopback)
 //	ZEN_GATE_ALLOW_REMOTE_ADMIN  accept the dashboard and /admin/api from a
 //	                          non-loopback address when the main key is presented
-//	                          (default off)
+//	                          (default on; 0/false/no/off keeps them loopback-only)
 //	ZEN_GATE_SHOW_KEY         print the main API key at boot (default off)
 //	ZEN_GATE_KEY              use this main API key instead of the one in
 //	                          config.json (persisted on boot; empty keeps it)
@@ -48,14 +48,18 @@ func main() {
 	}
 }
 
-func run() error {
-	opts := core.Options{
+// options maps the environment onto core.Options. It is a function rather than
+// an inline literal so the defaults are testable: the container is the one place
+// where "loopback-only admin" cannot work at all (every request arrives from the
+// bridge address), so remote admin defaults to on here and only here.
+func options() core.Options {
+	return core.Options{
 		Home:             strings.TrimSpace(os.Getenv("ZEN_GATE_HOME")),
 		Port:             envInt("ZEN_GATE_PORT"),
 		NoTray:           true, // logs go to stdout; the container collector owns them
 		DisableDesktop:   true, // no agent-config injection, self-update or sing-box sidecar
 		AllowLan:         envBool("ZEN_GATE_ALLOW_LAN", true),
-		AllowRemoteAdmin: envBool("ZEN_GATE_ALLOW_REMOTE_ADMIN", false),
+		AllowRemoteAdmin: envBool("ZEN_GATE_ALLOW_REMOTE_ADMIN", true),
 		// No desktop surface: user-facing toasts become log lines, and there is
 		// no browser to hand an OAuth URL to (the admin API returns the URL
 		// instead, and prints it here).
@@ -66,6 +70,10 @@ func run() error {
 			fmt.Printf("[open] %s\n", url)
 		},
 	}
+}
+
+func run() error {
+	opts := options()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -109,15 +117,16 @@ func report(c *core.Core, opts core.Options) {
 	} else {
 		fmt.Printf("API      %s  (仅本机；ZEN_GATE_ALLOW_LAN=1 才对局域网开放)\n", c.Gateway.BaseURL())
 	}
-	switch raw := strings.TrimSpace(os.Getenv("ZEN_GATE_ALLOW_REMOTE_ADMIN")); {
-	case opts.AllowRemoteAdmin:
-		fmt.Printf("admin    http://<本机地址>:%d/admin  (远端可用，先输主密钥)\n", port)
-	case raw == "":
-		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：容器里没有 ZEN_GATE_ALLOW_REMOTE_ADMIN；要远端管理就设成 1 再重建容器)\n", port)
-	case !envBool("ZEN_GATE_ALLOW_REMOTE_ADMIN", true):
-		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：ZEN_GATE_ALLOW_REMOTE_ADMIN=%q 是关闭值；要远端管理就改成 1 再重建容器)\n", port, raw)
-	default:
-		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：ZEN_GATE_ALLOW_REMOTE_ADMIN=%q 认不出来，只认 1/true/yes/on)\n", port, raw)
+	// 无界面入口默认允许远端管理（凭主密钥），所以这一行是常态；只有显式关掉
+	// （ZEN_GATE_ALLOW_REMOTE_ADMIN=0）或写了个认不出来的值时才是「仅本机」。
+	if opts.AllowRemoteAdmin {
+		fmt.Printf("admin    http://<本机地址>:%d/admin  (远端可用，先输主密钥；本机访问免密钥)\n", port)
+	} else {
+		raw := strings.TrimSpace(os.Getenv("ZEN_GATE_ALLOW_REMOTE_ADMIN"))
+		if raw == "" {
+			raw = "（未设置）"
+		}
+		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：ZEN_GATE_ALLOW_REMOTE_ADMIN=%s；要远端管理就删掉它或设成 1，再重建容器)\n", port, raw)
 	}
 	if envBool("ZEN_GATE_SHOW_KEY", false) {
 		fmt.Printf("key      %s\n", cfg.MainKey)
