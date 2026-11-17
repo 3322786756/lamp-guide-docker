@@ -132,6 +132,13 @@ func TestEnvBool(t *testing.T) {
 		// 认不出的值回落到默认值，而不是猜一个方向。
 		{"maybe", true, true},
 		{"2", false, false},
+		// 面板/compose/shell 常常把引号一起塞进环境变量里，别让它默默失效。
+		{`"1"`, false, true},
+		{`'1'`, false, true},
+		{` "true" `, false, true},
+		{`"off"`, true, false},
+		{"Enabled", false, true},
+		{"disabled", true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.val, func(t *testing.T) {

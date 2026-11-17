@@ -335,6 +335,14 @@ docker run --rm -v lamp-guide-data:/data -v "$PWD:/backup" alpine \
 
 **打开 `/admin` 是 403 / 一直停在登录页**：403 说明 `ZEN_GATE_ALLOW_REMOTE_ADMIN` 还是 `0`（远端只认回环）——页面里会直接写清楚要加的变量，改完重启容器即可（Unraid 模板默认已经是 `1`，新建的容器不受影响；老容器要在模板里点应用重建一次）。停在登录页则是主密钥输错了，或者换了主密钥导致会话失效（刷新重登即可）。本机用 `docker exec lamp-guide wget -qO- http://127.0.0.1:8787/admin/ui/ | head -5` 能确认界面本身在不在。
 
+**我明明加了 `ZEN_GATE_ALLOW_REMOTE_ADMIN=1`，还是 403**：按顺序查这三件事，403 页面本身会把「这个进程读到的值」印出来，先看那个：
+
+1. 变量到底进没进容器：`docker exec lamp-guide env | grep ZEN_GATE`。没有就是没生效——`docker restart` **不会**带上新的 `-e`，必须重建容器（Unraid 点「应用」/「强制更新」，compose 用 `up -d`，`docker run` 重新跑一次）。
+2. 值有没有被引号包住：`ZEN_GATE_ALLOW_REMOTE_ADMIN="1"` 这种写法以前会被当成认不出来（现在会自动去掉引号）。值只认 `1` / `true` / `yes` / `on`，`0` / `false` / `off` 都算关闭。
+3. 是不是加在了别的地方：模板/`docker run` 里都要落在**同一个容器**上；`docker inspect lamp-guide --format '{{json .Config.Env}}'` 能看到这个容器最终的完整环境变量。
+
+启动日志里也有一行写清了状态：`admin … (远端可用，先输主密钥)` 或 `admin … (仅本机：容器里没有 ZEN_GATE_ALLOW_REMOTE_ADMIN…)`。
+
 **界面里点「导出」没反应**：浏览器拦了下载？换个浏览器或允许该站点下载；导出的文件是网关生成的一次性令牌（10 分钟内有效、只能下一次）。
 
 **订阅/代理模式不生效**：见上文「镜像里有什么」——容器入口裁掉了 sing-box 侧车。要代理就在宿主机层面做（`HTTP_PROXY` 走宿主机的代理网关），或者别用容器。

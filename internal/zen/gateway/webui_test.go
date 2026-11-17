@@ -194,6 +194,13 @@ func TestBrowserUIRefusedWithoutOptIn(t *testing.T) {
 			t.Fatalf("说明页里没提到 %q:\n%s", want, body)
 		}
 	}
+	// 「我明明加了变量」这类投诉：页面要把进程读到的值原样写出来，别只让人猜。
+	t.Setenv("ZEN_GATE_ALLOW_REMOTE_ADMIN", "0")
+	w = do(s, remoteUIRequest("GET", "http://192.168.1.9:8787/admin", ""))
+	if got := w.Body.String(); !strings.Contains(got, `<b class="val">0</b>`) || !strings.Contains(got, "现在是关的") {
+		t.Fatalf("说明页应当回显进程读到的值并说清它是关的:\n%s", got)
+	}
+	t.Setenv("ZEN_GATE_ALLOW_REMOTE_ADMIN", "")
 	w = do(s, remoteUIRequest("POST", "http://192.168.1.9:8787/admin/login", `{"key":"x"}`))
 	if w.Code != 403 {
 		t.Fatalf("未开远端管理时登录口 status=%d", w.Code)

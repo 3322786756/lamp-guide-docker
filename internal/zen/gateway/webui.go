@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"mime"
@@ -211,6 +212,11 @@ const remoteAdminOffPage = `<!doctype html>
   ghcr.io/3322786756/lamp-guide-docker:latest</pre>
   <p class="dim">Unraid：把模板里的「允许远端管理」改成 1，点应用（容器会重建）；compose：<code>ZEN_GATE_ALLOW_REMOTE_ADMIN: "1"</code>。</p>
   <div class="sep"></div>
+  <p><b>先确认变量真的进了容器</b>（<code>docker restart</code> 不会带上新的 <code>-e</code>，必须重建容器）：</p>
+  <pre>docker exec lamp-guide env | grep ZEN_GATE</pre>
+  <p>这个进程读到的 <code>ZEN_GATE_ALLOW_REMOTE_ADMIN</code> 是 <b class="val">{{value}}</b>。</p>
+  <p class="dim hint">{{hint}}</p>
+  <div class="sep"></div>
   <p class="dim">不想对外开放也行：在 NAS 上 <code>ssh -L 8787:127.0.0.1:8787 root@nas</code>，再在本机打开 <code>http://127.0.0.1:8787/admin</code>，这样不需要开远端管理。</p>
   <p class="dim">这个端口上的 <code>/v1</code>（模型接口）和 <code>/health</code> 不受影响，照旧可用。</p>
 </main>
@@ -221,11 +227,40 @@ const remoteAdminOffPage = `<!doctype html>
 // serveRemoteAdminOff renders that page. Status stays 403 so scripts and the
 // CI smoke checks keep seeing a refusal, only the body became readable.
 func (s *Server) serveRemoteAdminOff(w http.ResponseWriter, r *http.Request) {
+	value, hint := remoteAdminOffState()
+	page := strings.ReplaceAll(remoteAdminOffPage, "{{value}}", html.EscapeString(value))
+	page = strings.ReplaceAll(page, "{{hint}}", html.EscapeString(hint))
 	w.Header().Set("content-type", "text/html; charset=utf-8")
 	w.Header().Set("cache-control", "no-store")
 	w.Header().Set("x-content-type-options", "nosniff")
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = io.WriteString(w, remoteAdminOffPage)
+	_, _ = io.WriteString(w, page)
+}
+
+// remoteAdminOffState 说清「为什么远端被挡住」，用的是这个进程真正读到的环境变
+// 量 —— 「我明明加了 ZEN_GATE_ALLOW_REMOTE_ADMIN=1」这类问题就看这两行：变量没
+// 进容器，还是值写得认不出来，还是容器根本没重建。
+func remoteAdminOffState() (value, hint string) {
+	raw, set := os.LookupEnv("ZEN_GATE_ALLOW_REMOTE_ADMIN")
+	if !set {
+		return "（没有设置）",
+			"容器里没有这个变量。docker restart 不会应用新的 -e，要重建容器：Unraid 点「应用」或「强制更新」，compose 用 up -d，docker run 就重新 run 一次。"
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "（空值）",
+			"变量存在但是空的，等同于关闭。改成 1 再重建容器。"
+	}
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(raw), `"'`)) {
+	case "1", "true", "yes", "y", "on", "enable", "enabled":
+		return raw,
+			"值看着是对的，说明容器还是加变量之前的那个进程：重建容器后才会生效。"
+	case "0", "false", "no", "n", "off", "disable", "disabled":
+		return raw,
+			"这个变量现在是关的（0/false/off 都算关闭）。改成 1 再重建容器。"
+	default:
+		return raw,
+			"这个值认不出来。只认 1 / true / yes / on（大小写随意，别带引号或空格），改掉再重建容器。"
+	}
 }
 
 // serveAssets serves web/ under /admin/ui/, with no directory listings: the

@@ -109,10 +109,15 @@ func report(c *core.Core, opts core.Options) {
 	} else {
 		fmt.Printf("API      %s  (仅本机；ZEN_GATE_ALLOW_LAN=1 才对局域网开放)\n", c.Gateway.BaseURL())
 	}
-	if opts.AllowRemoteAdmin {
-		fmt.Printf("admin    http://<本机地址>:%d/admin/api/*  (需主密钥)\n", port)
-	} else {
-		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机；远端浏览器/接口请设 ZEN_GATE_ALLOW_REMOTE_ADMIN=1)\n", port)
+	switch raw := strings.TrimSpace(os.Getenv("ZEN_GATE_ALLOW_REMOTE_ADMIN")); {
+	case opts.AllowRemoteAdmin:
+		fmt.Printf("admin    http://<本机地址>:%d/admin  (远端可用，先输主密钥)\n", port)
+	case raw == "":
+		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：容器里没有 ZEN_GATE_ALLOW_REMOTE_ADMIN；要远端管理就设成 1 再重建容器)\n", port)
+	case !envBool("ZEN_GATE_ALLOW_REMOTE_ADMIN", true):
+		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：ZEN_GATE_ALLOW_REMOTE_ADMIN=%q 是关闭值；要远端管理就改成 1 再重建容器)\n", port, raw)
+	default:
+		fmt.Printf("admin    http://127.0.0.1:%d/admin  (仅本机：ZEN_GATE_ALLOW_REMOTE_ADMIN=%q 认不出来，只认 1/true/yes/on)\n", port, raw)
 	}
 	if envBool("ZEN_GATE_SHOW_KEY", false) {
 		fmt.Printf("key      %s\n", cfg.MainKey)
@@ -176,13 +181,15 @@ func envInt(name string) int {
 
 // envBool reads a toggle, with an explicit default for the unset case.
 func envBool(name string, def bool) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	// 顺手容忍带引号的写法：NAS 面板、compose、shell 都可能把引号一起塞进来，
+	// 「我明明写了 1 怎么还是关的」十有八九就是 ZEN_GATE_ALLOW_REMOTE_ADMIN="1"。
+	v := strings.ToLower(strings.Trim(strings.TrimSpace(os.Getenv(name)), `"'`))
 	switch v {
 	case "":
 		return def
-	case "1", "true", "yes", "on":
+	case "1", "true", "yes", "y", "on", "enable", "enabled":
 		return true
-	case "0", "false", "no", "off":
+	case "0", "false", "no", "n", "off", "disable", "disabled":
 		return false
 	default:
 		fmt.Fprintf(os.Stderr, "忽略无法识别的 %s=%q\n", name, v)
