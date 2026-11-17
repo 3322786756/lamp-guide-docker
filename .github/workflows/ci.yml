@@ -257,6 +257,12 @@ jobs:
           test -n "$token"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "http://127.0.0.1:8791/admin/download/$token")" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "http://127.0.0.1:8791/admin/download/$token")" = 404
+          # PKCE 回调路径必须公开（浏览器顶层导航带不了 Authorization，也带不上会话），
+          # 但没有进行中的登录 / state 对不上时只回一页说明，绝不写进槽位。
+          cb=$(curl -s -o /tmp/cb.html -w '%{http_code}' \
+            "http://127.0.0.1:8791/channel/callback/trae?state=nope&code=x")
+          test "$cb" = 400
+          grep -q '没有正在进行的登录' /tmp/cb.html
           docker rm -f lgui
       - name: Container logs
         if: failure()

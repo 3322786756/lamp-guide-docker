@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -640,7 +643,7 @@ func (s *Server) adminChannelLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	sess, err := chprov.StartLogin(ctx, id)
+	sess, err := chprov.StartLoginAt(ctx, id, channelCallbackURI(r, spec))
 	if err != nil {
 		writeJSON(w, 502, map[string]any{"ok": false, "error": err.Error(), "kind": spec.Login.Kind})
 		return
@@ -649,6 +652,58 @@ func (s *Server) adminChannelLogin(w http.ResponseWriter, r *http.Request) {
 		s.logger.Infof("渠道 %s 开始登录（形态 %s）", id, sess.Kind)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "session": sess, "kind": spec.Login.Kind})
+}
+
+// channelCallbackPrefix 是网关替各家接授权的路径前缀（后面跟渠道 id）。
+const channelCallbackPrefix = "/channel/callback/"
+
+// channelCallbackURI 决定这一次 PKCE 登录的回调地址。
+//
+// 桌面版返回空串 —— 让 chprov 起一个本机回环监听，回调落到
+// 127.0.0.1:<临时端口>。容器里不行：用户的浏览器在另一台机器上，
+// 那个 127.0.0.1 指的是浏览器自己，跳过去没有任何东西在听，
+// 面板就停在「正在等待上游确认…」永远不动。这时换成浏览器**现在用的**
+// 地址 + /channel/callback/<id>，由网关自己接住，state 照旧按会话校验。
+//
+// ⚠️ Google 的桌面客户端只登记了 127.0.0.1 回环回调，换成别的地址会在
+// 授权页直接报 redirect_uri_mismatch —— 这一家仍然让它跳回环。
+func channelCallbackURI(r *http.Request, spec chprov.Spec) string {
+	if remoteIsLoopback(r) || strings.Contains(spec.Login.AuthURL, "accounts.google.com") {
+		return ""
+	}
+	return externalOrigin(r) + channelCallbackPrefix + neturl.PathEscape(spec.ID)
+}
+
+// adminChannelCallback 接上游跳回来的 PKCE 回调（code 或 error）。
+//
+// ⚠️ 这条路径**不**过 adminFence：跳转是浏览器发起的顶层导航，带不了
+// Authorization 头，也带不上管理会话（容器里用户可能刚清过 cookie）。
+// 安全性靠 state —— 每次登录新铸的随机串，只有发起那次登录的会话认得它；
+// 对不上的回调直接丢弃，槽位不会被写。
+func (s *Server) adminChannelCallback(w http.ResponseWriter, r *http.Request, id string) {
+	if _, ok := chprov.SpecOf(id); !ok {
+		s.writeCallbackPage(w, 404, "渠道不存在："+id)
+		return
+	}
+	status, msg := chprov.ChannelCallback(id, r.URL.Query())
+	if s.logger != nil {
+		s.logger.Infof("渠道 %s 收到授权回调（%d）", id, status)
+	}
+	s.writeCallbackPage(w, status, msg)
+}
+
+// writeCallbackPage 是回调落地的那个页面：只有一句话，但要是一页正常 HTML，
+// 否则浏览器会把中文显示成乱码，用户以为授权失败。
+func (s *Server) writeCallbackPage(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("content-type", "text/html; charset=utf-8")
+	w.Header().Set("cache-control", "no-store")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8">`+
+		`<title>Lamp Guide · 授权</title>`+
+		`<body style="font:14px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;`+
+		`background:#101114;color:#e8e8ea;padding:56px 24px;text-align:center">`+
+		`<p style="font-size:16px">`+html.EscapeString(msg)+`</p>`+
+		`<p style="opacity:.55">这个页面可以关掉，回到面板看结果。</p>`)
 }
 
 // adminChannelPoll 是 GET channel/poll?id=…：轮一次登录。成功后凭据落盘。

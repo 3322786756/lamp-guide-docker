@@ -19,6 +19,7 @@
 - 浏览器界面细节修正：没登录直接打开 `/admin/ui/`（或无斜杠的 `/admin/ui`）时，改为跳转到登录页（原来是一句 JSON 401）；js/css/图标等静态资源不再要求会话，登录页上的图标不再坏图；会话 cookie 从 `SameSite=Strict` 改成 `Lax`，从 Unraid 面板、书签这类跨站顶层导航过来不会每次都掉登录。
 - 无界面入口（容器 / 直接跑 `lamp-guide-server`）不再默认「只给容器本机」：`ZEN_GATE_ALLOW_REMOTE_ADMIN` 默认改成开启，装好就能从局域网浏览器打开 `/admin` 输主密钥登录、用 `Authorization: Bearer <主密钥>` 调 `/admin/api/*`；回环调用方照旧免密钥。想锁回本机才设成 `0`（Dockerfile、compose、Unraid 模板与文档同步）。
 - 排查更省事：`ZEN_GATE_ALLOW_REMOTE_ADMIN` 的值现在容忍引号和空格，`1/true/yes/on` 之外还会认 `enable(d)`、`0/false/no/off/disable(d)`；启动日志与 403 说明页都会写出这个进程实际读到的值，并说明「变量没进容器 / 值认不出 / 容器没重建」是哪种情况。
+- 修掉容器里登录 PKCE 渠道（TRAE、Accio、LobsterAI 等）一直停在「正在等待上游确认…」：这类渠道的浏览器授权原本回调到 `127.0.0.1:<临时端口>`，而容器里的浏览器在另一台机器，它的回环地址回不到网关。现在浏览器不在本机时，回调地址改用浏览器正在用的那个地址 `http://<宿主机>:8787/channel/callback/<渠道 id>`，由网关自己接住（新增公开路径 `/channel/callback/<渠道 id>`，按每次登录新铸的 `state` 校验，对不上只回一页说明），换 token 时用的是同一个地址。Gemini 例外：Google 桌面客户端只登记了回环回调，仍需在跑网关的机器上开浏览器或走 ssh 隧道。
 
 ## Lamp Guide 1.2.1 — 2026-11-06
 

@@ -508,6 +508,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case path == "/favicon.png":
 		w.Header().Set("content-type", "image/png")
 		_, _ = w.Write(faviconPNG)
+	case strings.HasPrefix(path, channelCallbackPrefix):
+		// PKCE 的授权回调：浏览器从上游跳回来的顶层导航，不带任何凭据头，
+		// 因此不过 adminFence（安全性由每次登录新铸的 state 保证）。
+		s.adminChannelCallback(w, r, strings.TrimPrefix(path, channelCallbackPrefix))
 	case path == "" || path == "/" || path == "/admin":
 		s.serveDashboard(w, r)
 	case path == browserUIDir || strings.HasPrefix(path, browserUIDir+"/"):

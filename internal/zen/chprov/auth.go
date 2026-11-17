@@ -61,6 +61,13 @@ type LoginSession struct {
 	Detail string `json:"detail,omitempty"`
 	// LocalPort 是 PKCE 起在本机的回环端口。
 	LocalPort int `json:"localPort,omitempty"`
+	// RedirectURI 是这一次**真的送出去**的回调地址（换 token 时必须原样再送一次）。
+	//
+	// 桌面版把它指到本机回环的临时端口；容器里浏览器在另一台机器上，
+	// 127.0.0.1 指的是**浏览器那台机器**而不是容器 —— 回调永远到不了网关，
+	// 面板就停在「正在等待上游确认」。那种情况（见 StartLoginAt）把它换成
+	// 网关自己的地址，这里同时留住这个值，好让 PollPKCE 用同一个字符串去换 token。
+	RedirectURI string `json:"redirectURI,omitempty"`
 	// StartedAtMS 用于 10 分钟超时（与 workbuddy 的 wbLoginTTL 同档）。
 	StartedAtMS int64 `json:"startedAtMs"`
 }
@@ -75,8 +82,20 @@ var (
 	sessTab = map[string]*LoginSession{}
 )
 
-// StartLogin 按描述表的形态开一次授权。
+// StartLogin 按描述表的形态开一次授权（PKCE 回调落在本机回环上）。
 func StartLogin(ctx context.Context, id string) (LoginSession, error) {
+	return StartLoginAt(ctx, id, "")
+}
+
+// StartLoginAt 与 StartLogin 相同，但可以把 PKCE 的回调地址指定成
+// **调用方自己的地址**（callbackURI 为空则仍然起本机回环监听）。
+//
+// 存在的理由是容器：网关跑在 NAS 的容器里，用户的浏览器在另一台机器上。
+// PKCE 的回调是浏览器跳过去的，`http://127.0.0.1:<临时端口>` 对它来说指
+// 自己的机器 —— 那个端口上没有监听器，于是「授权页点完了、面板永远在等」。
+// 把回调指到网关自己的 /channel/callback/<id>（见网关侧的同名路由）就绕开了
+// 这一跳；state 仍然按会话校验，不会因为地址公开而变成开放回调。
+func StartLoginAt(ctx context.Context, id, callbackURI string) (LoginSession, error) {
 	spec, ok := SpecOf(id)
 	if !ok {
 		return LoginSession{}, errors.New("渠道 " + id + " 没有登记在本表里")
@@ -97,7 +116,7 @@ func StartLogin(ctx context.Context, id string) (LoginSession, error) {
 	case LoginCliFlow:
 		return startCliFlow(ctx, spec)
 	case LoginPKCE:
-		return startPKCE(spec)
+		return startPKCE(spec, callbackURI)
 	case LoginQR:
 		// 二维码有两种来源：授权页里内嵌 uuid（微信），或本机生成 code 并自己
 		// 渲染图（raccoon）。用描述表的字段区分，不靠渠道 id 特判。
@@ -582,30 +601,37 @@ func cliPollToken() string {
 
 // --- 本机回环 + PKCE ---------------------------------------------------------
 
-// startPKCE 起一个本机回环监听，把授权页给用户。
+// startPKCE 起一个本机回环监听（或改用调用方给的回调地址），把授权页给用户。
 //
-// ⚠️ 这里**真的起一个 127.0.0.1 监听**：PKCE 流程的回调必须落到一个真实端口，
-// 而上游把 redirect_uri 当白名单核对（写错端口 = 授权页直接报 redirect_uri_mismatch）。
-// 监听器在拿到 code 或超时后自己关闭，**不是**常驻服务：多开一次登录不该留下
-// 一个占着端口、再也收不到东西的 goroutine。
+// ⚠️ callbackURI 为空时**真的起一个 127.0.0.1 监听**：PKCE 流程的回调必须落到
+// 一个真实端口，而上游把 redirect_uri 当白名单核对（写错端口 = 授权页直接报
+// redirect_uri_mismatch）。监听器在拿到 code 或超时后自己关闭，**不是**常驻服务。
+//
+// ⚠️ callbackURI 非空时（容器里的浏览器在另一台机器上）**不起监听**：那一跳由
+// 网关自己的 /channel/callback/<id> 接住，再写进同一个 code 槽位。
 //
 // ⚠️ 回调只处理**一次**：拿到 code 立刻 close。第二次回调（用户刷新页面）
 // 会拿到 410，而不是被当成又一次授权 —— 两次 code 换同一份 token 的话，
 // 上游通常会作废后一个，用户看到的是「登录成功了但我又是未登录」。
-func startPKCE(spec Spec) (LoginSession, error) {
+func startPKCE(spec Spec, callbackURI string) (LoginSession, error) {
 	verifier, challenge, err := pkcePair()
 	if err != nil {
 		return LoginSession{}, err
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		// 端口被占/被防火墙挡：如实报，不悄悄换一条「贴 Key」的路——
-		// 那会让用户以为这家支持贴 Key，而实际上只能走浏览器。
-		return LoginSession{}, errors.New("本机回环监听失败：" + err.Error())
+	var ln net.Listener
+	port := 0
+	redirect := strings.TrimSpace(callbackURI)
+	if redirect == "" {
+		ln, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			// 端口被占/被防火墙挡：如实报，不悄悄换一条「贴 Key」的路——
+			// 那会让用户以为这家支持贴 Key，而实际上只能走浏览器。
+			return LoginSession{}, errors.New("本机回环监听失败：" + err.Error())
+		}
+		port = ln.Addr().(*net.TCPAddr).Port
+		redirect = "http://127.0.0.1:" + strconv.Itoa(port) + spec.Login.CallbackPath
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
 	state := uuidV4()
-	redirect := "http://127.0.0.1:" + strconv.Itoa(port) + spec.Login.CallbackPath
 	openURL := spec.Login.AuthURL
 	if openURL != "" {
 		// 授权页参数按各家的真实形态拼：Google 要 response_type=code + PKCE，
@@ -638,7 +664,9 @@ func startPKCE(spec Spec) (LoginSession, error) {
 		if strings.Contains(openURL, "trae.cn") {
 			machineID, deviceID, err := traeLoginIdentity()
 			if err != nil {
-				ln.Close()
+				if ln != nil {
+					ln.Close()
+				}
 				return LoginSession{}, errors.New("生成 trae 设备标识失败：" + err.Error())
 			}
 			traceID := machineID + deviceID
@@ -710,13 +738,17 @@ func startPKCE(spec Spec) (LoginSession, error) {
 	s := LoginSession{
 		Channel: spec.ID, Kind: LoginPKCE,
 		State: state, Verifier: verifier, OpenURL: openURL,
-		LocalPort: port, IntervalMS: 1000,
+		LocalPort: port, RedirectURI: redirect, IntervalMS: 1000,
 		ExpiresAtMS: time.Now().Add(loginTTL).UnixMilli(),
 		StartedAtMS: time.Now().UnixMilli(),
 		Detail:      spec.Login.Note,
 	}
 	// 后台收 code：拿到就写进会话的 codeSlot，轮询那边读走即清。
-	go serveCallback(ln, spec, state)
+	// 改成网关地址时没有监听器 —— 那一跳由网关的 /channel/callback/<id> 接住，
+	// 走的是同一个槽位（AcceptCallback），所以轮询这一侧不需要分叉。
+	if ln != nil {
+		go serveCallback(ln, spec, state)
+	}
 	return remember(s), nil
 }
 
@@ -726,37 +758,79 @@ var (
 	codeTab = map[string]string{}
 )
 
+// AcceptCallback 收一次浏览器带回来的授权回调（code + state），写进槽位。
+//
+// 两条路共用它：桌面版本机回环那个一次性监听器（serveCallback），以及
+// 容器里网关自己的 /channel/callback/<id>（浏览器在另一台机器上，回不到
+// 127.0.0.1）。校验一律对**会话里的 state**：回调地址是公开的，但 state 是
+// 每次登录新铸的随机串，猜不到就写不进槽位。
+func AcceptCallback(id, state, code string) error {
+	if strings.TrimSpace(code) == "" {
+		return errors.New("回调里没有 code")
+	}
+	return putCallback(id, state, code)
+}
+
+// RejectCallback 记录一次「上游明确拒绝」（授权页带 error=… 跳回来）。
+func RejectCallback(id, state, msg string) error {
+	if strings.TrimSpace(msg) == "" {
+		msg = "未给出原因"
+	}
+	return putCallback(id, state, "!"+msg)
+}
+
+func putCallback(id, state, value string) error {
+	sess, ok := Session(id)
+	if !ok {
+		return errors.New("没有正在进行的登录（可能已超时，或这次登录不是在这台网关上发起的）")
+	}
+	if sess.State == "" || state != sess.State {
+		// state 不匹配是 CSRF 形态：**不**写进槽位，也不提示「成功了」。
+		return errors.New("state 不匹配，这次回调被丢弃")
+	}
+	codeMu.Lock()
+	codeTab[id+"|"+state] = value
+	codeMu.Unlock()
+	return nil
+}
+
+// ChannelCallback 是给网关那条公开回调路径用的入口：把上游跳回来的
+// code / error 落进会话槽位，并返回该显示给用户的状态码与文案。
+func ChannelCallback(id string, q url.Values) (int, string) {
+	return takeCallback(id, q)
+}
+
+// takeCallback 把一次回调落进槽位，并给出该显示给用户的那一页文案。
+func takeCallback(id string, q url.Values) (int, string) {
+	if e := q.Get("error"); e != "" {
+		if err := RejectCallback(id, q.Get("state"), e); err != nil {
+			return 400, err.Error() + "。"
+		}
+		return 400, "授权被拒绝：" + e + "，可以关掉这个页面了。"
+	}
+	if err := AcceptCallback(id, q.Get("state"), q.Get("code")); err != nil {
+		return 400, err.Error() + "。"
+	}
+	return 200, "授权已收到，可以关掉这个页面回到面板了。"
+}
+
 // serveCallback 收一次回调并关闭监听器。
 func serveCallback(ln net.Listener, spec Spec, state string) {
 	defer ln.Close()
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// 只认这一次登录的 state：后来的另一次登录会把会话顶掉，
+		// 那时这个监听器手里的 state 已经过期，回调照旧被丢弃。
 		q := r.URL.Query()
-		if e := q.Get("error"); e != "" {
-			codeMu.Lock()
-			codeTab[spec.ID+"|"+state] = "!" + e
-			codeMu.Unlock()
-			w.WriteHeader(400)
-			_, _ = io.WriteString(w, "授权被拒绝："+e+"，可以关掉这个页面了。")
-			return
-		}
-		if q.Get("state") != state {
-			// state 不匹配是 CSRF 形态：**不**写进槽位，也不提示「成功了」。
+		if got := q.Get("state"); got != state {
 			w.WriteHeader(400)
 			_, _ = io.WriteString(w, "state 不匹配，这次回调被丢弃。")
 			return
 		}
-		code := q.Get("code")
-		if code == "" {
-			w.WriteHeader(400)
-			_, _ = io.WriteString(w, "回调里没有 code。")
-			return
-		}
-		codeMu.Lock()
-		codeTab[spec.ID+"|"+state] = code
-		codeMu.Unlock()
-		_, _ = io.WriteString(w, "授权已收到，可以关掉这个页面回到面板了。")
+		status, msg := takeCallback(spec.ID, q)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, msg)
 	})
 	srv.Handler = mux
 	go func() {
@@ -781,7 +855,12 @@ func PollPKCE(ctx context.Context, spec Spec, sess LoginSession) (string, Accoun
 	if strings.HasPrefix(code, "!") {
 		return "", Account{}, errors.New("授权被拒绝：" + strings.TrimPrefix(code, "!"))
 	}
-	redirect := "http://127.0.0.1:" + strconv.Itoa(sess.LocalPort) + spec.Login.CallbackPath
+	// 换 token 时的 redirect_uri 必须与授权时送出去的**逐字相同**（OAuth 的硬约定），
+	// 所以优先用会话里记下的那个：容器里它是网关自己的地址，不是回环地址。
+	redirect := sess.RedirectURI
+	if redirect == "" {
+		redirect = "http://127.0.0.1:" + strconv.Itoa(sess.LocalPort) + spec.Login.CallbackPath
+	}
 	body := map[string]any{
 		"grant_type":    "authorization_code",
 		"code":          code,

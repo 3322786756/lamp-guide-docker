@@ -305,6 +305,27 @@ func remoteIsLoopback(r *http.Request) bool {
 	return remote == "127.0.0.1" || remote == "::1"
 }
 
+// externalOrigin 是「浏览器现在用的那个地址」（scheme://Host）。
+//
+// 容器里它形如 http://192.168.0.3:8787：发给上游的回调地址必须用这个前缀，
+// 而不是 127.0.0.1 —— 浏览器的 127.0.0.1 指的是浏览器那台机器。
+func externalOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	// 反代（nginx / Caddy / Unraid 的 swag 之类）终止 TLS 时，真实 scheme 只在这个头里。
+	if v := strings.TrimSpace(r.Header.Get("x-forwarded-proto")); v != "" {
+		if i := strings.IndexByte(v, ','); i >= 0 {
+			v = v[:i]
+		}
+		if v = strings.ToLower(strings.TrimSpace(v)); v == "http" || v == "https" {
+			scheme = v
+		}
+	}
+	return scheme + "://" + r.Host
+}
+
 func adminLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
