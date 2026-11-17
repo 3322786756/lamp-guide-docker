@@ -66,10 +66,12 @@ jobs:
           test "$(docker image inspect --format '{{.Architecture}}' lamp-guide:ci)" = amd64
           docker run -d --name lg -p 8787:8787 lamp-guide:ci
           for _ in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:8787/health | grep -q '"ok":true' && break
+            body=$(curl -fsS http://127.0.0.1:8787/health 2>/dev/null || true)
+            grep -qi '"ok":true' <<<"$body" && break
             sleep 2
           done
-          curl -fsS http://127.0.0.1:8787/health | grep -q '"ok":true'
+          body=$(curl -fsS http://127.0.0.1:8787/health)
+          grep -qi '"ok":true' <<<"$body" || { printf '%s\n' "$body"; exit 1; }
           echo "--- boot log ---"
           docker logs lg
           # 首次启动必须把 config.json 落到卷目录：那是网关的全部状态。
@@ -101,7 +103,8 @@ jobs:
           grep -qi '<html' /tmp/admin-off.html
           grep -q 'ZEN_GATE_ALLOW_REMOTE_ADMIN' /tmp/admin-off.html
           # 回环（容器内部）打开界面资源：直接 200，说明 403 只针对「远端 + 未开 opt-in」。
-          docker exec lg wget -qO- http://127.0.0.1:8787/admin/ui/ | grep -qi 'Lamp Guide'
+          ui=$(docker exec lg wget -qO- http://127.0.0.1:8787/admin/ui/ || true)
+          grep -qi 'Lamp Guide' <<<"$ui"
           # SIGTERM：进程要自己收尾并以 0 退出，而不是被 15s 后 SIGKILL 掉（137）。
           docker stop -t 15 lg
           code=$(docker inspect --format '{{.State.ExitCode}}' lg)
@@ -114,9 +117,13 @@ jobs:
       - name: Smoke test data directory ownership
         run: |
           set -euo pipefail
+          # pipefail + `grep -q` 会出人命：grep 命中就退出，上游（docker logs/curl）被
+          # SIGPIPE 打断，整条管道返回 141，步骤直接失败。所以一律先取回文本再匹配。
+          has() { grep -qi -- "$1" <<<"${2-}"; }
           wait_health() {
             for _ in $(seq 1 30); do
-              curl -fsS "$1/health" | grep -q '"ok":true' && return 0
+              body=$(curl -fsS "$1/health" 2>/dev/null || true)
+              has '"ok":true' "$body" && return 0
               sleep 2
             done
             return 1
@@ -131,7 +138,8 @@ jobs:
           docker run -d --name lgperm -p 8789:8787 -v "$PWD/permtest:/data" lamp-guide:ci
           wait_health http://127.0.0.1:8789 || { docker logs lgperm; exit 1; }
           # 入口脚本的提示走 stderr，docker logs 要合并两路才 grep 得到。
-          docker logs lgperm 2>&1 | grep -q '当前属主 0:0'
+          boot=$(docker logs lgperm 2>&1 || true)
+          has '当前属主 0:0' "$boot" || { printf '%s\n' "$boot"; echo '入口脚本没有打印属主纠正提示'; exit 1; }
           # permtest 是 0700，属主已被入口脚本改成 10001，runner 用户进不去，断言必须借 sudo。
           sudo test -s permtest/config.json
           echo "config.json owner=$(sudo stat -c '%u:%g' permtest/config.json)"
@@ -157,7 +165,8 @@ jobs:
             -e ZEN_GATE_KEY=ci-custom-key-9f3a1c7b \
             lamp-guide:ci
           for _ in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:8788/health | grep -q '"ok":true' && break
+            body=$(curl -fsS http://127.0.0.1:8788/health 2>/dev/null || true)
+            grep -qi '"ok":true' <<<"$body" && break
             sleep 2
           done
           echo "--- boot log ---"
@@ -181,16 +190,19 @@ jobs:
             -e ZEN_GATE_KEY=ci-ui-key-0123456789abcdef \
             lamp-guide:ci
           for _ in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:8791/health | grep -q '"ok":true' && break
+            body=$(curl -fsS http://127.0.0.1:8791/health 2>/dev/null || true)
+            grep -qi '"ok":true' <<<"$body" && break
             sleep 2
           done
           echo "--- boot log ---"
           docker logs lgui
           # 回环（容器自己）打开 /admin：不用登录，直接拿到界面。
-          docker exec lgui sh -c 'wget -qO- http://127.0.0.1:8787/admin/ui/ | grep -qi "Lamp Guide"'
+          ui=$(docker exec lgui wget -qO- http://127.0.0.1:8787/admin/ui/ || true)
+          grep -qi 'Lamp Guide' <<<"$ui"
           # 远端：登录页而不是 403，说明远端管理开关生效；没会话时 RPC 一律 401。
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin)" = 200
-          curl -s http://127.0.0.1:8791/admin | grep -q '主密钥'
+          loginpage=$(curl -s http://127.0.0.1:8791/admin)
+          grep -qi '主密钥' <<<"$loginpage"
           # 没登录就打开界面页面：跳回登录页，而不是丢一句 JSON 401；
           # 静态资源（登录页上的图标、界面脚本）不要求会话。
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/admin/ui/)" = 303
@@ -220,9 +232,10 @@ jobs:
           # 带会话：/admin 跳界面目录，静态资源与 RPC 都通，state 里真的有数据。
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" http://127.0.0.1:8791/admin)" = 303
           test "$(curl -s -b "$jar" http://127.0.0.1:8791/admin/ui/js/webbridge.js | wc -c)" -gt 1000
-          curl -s -b "$jar" -X POST -H 'Content-Type: application/json' \
+          state=$(curl -s -b "$jar" -X POST -H 'Content-Type: application/json' \
             --data '{"id":7,"method":"Gateway","payload":{"path":"state"}}' \
-            http://127.0.0.1:8791/admin/rpc | grep -q '"ok":true'
+            http://127.0.0.1:8791/admin/rpc)
+          grep -qi '"ok":true' <<<"$state" || { printf '%s\n' "$state"; exit 1; }
           # 导出走一次性下载令牌：能下载，第二次必须 404。
           token=$(curl -s -b "$jar" -X POST -H 'Content-Type: application/json' \
             --data '{"id":8,"method":"Gateway","payload":{"path":"state","saveTo":"state.json"}}' \
